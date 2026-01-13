@@ -29,7 +29,7 @@ const protect = async (req, res, next) => {
           const adminDoc = await Admin.findById(adminId).select("-password").lean();
           if (adminDoc) {
             req.admin = adminDoc;
-            console.log(" [auth] Attached admin from DB:", adminDoc._id?.toString?.(), adminDoc.email);
+            // console.log(" [auth] Attached admin from DB:", adminDoc._id?.toString?.(), adminDoc.email);
           } else {
             // DB lookup returned nothing — attach decoded payload as fallback
             req.admin = decoded;
@@ -65,7 +65,7 @@ const protect = async (req, res, next) => {
       if (req.admin?.workflows) {
         try {
           const preview = JSON.stringify(req.admin.workflows).slice(0, 300);
-          console.log(" [auth] admin.workflows type:", typeof req.admin.workflows, "preview:", preview);
+          // console.log(" [auth] admin.workflows type:", typeof req.admin.workflows, "preview:", preview);
         } catch (e) {
           console.log(" [auth] admin.workflows present (could not stringify preview)");
         }

@@ -296,8 +296,6 @@ export default function ApplicationView() {
   };
 
   // ================== Fetch application ==================
-  // ================== Fetch application ==================
-  // ================== Fetch application ==================
   useEffect(() => {
     if (!id) {
       console.log("⚠️ ApplicationView: no id param — skipping fetch.");
@@ -305,18 +303,18 @@ export default function ApplicationView() {
     }
 
     (async () => {
-      console.log("🔍 [ApplicationView] Fetching application id:", id);
+      // console.log(" [ApplicationView] Fetching application id:", id);
       setLoading(true);
       try {
-        console.log("➡️ GET /workflow/" + id);
+        // console.log("GET /workflow/" + id);
         const { data } = await api.get(`/workflow/${id}`);
-        console.log("✅ Application fetched:", data);
+        // console.log(" Application fetched:", data);
         setApp(data);
       } catch (err) {
-        console.error("❌ Application fetch error:", err?.response?.status, err?.response?.data || err.message);
+        console.error(" Application fetch error:", err?.response?.status, err?.response?.data || err.message);
       } finally {
         setLoading(false);
-        console.log("⏹ ApplicationView: fetch finished.");
+        // console.log("ApplicationView: fetch finished.");
       }
     })();
   }, [id]);
@@ -326,17 +324,17 @@ export default function ApplicationView() {
   // ================== Fetch admin workflow ==================
   useEffect(() => {
     (async () => {
-      console.log(" [useEffect] Fetching admin workflow...");
+      // console.log(" [useEffect] Fetching admin workflow...");
       setLoadingWorkflow(true);
       try {
-        console.log("➡️ API call: GET /admin/workflow");
+        // console.log(" API call: GET /admin/workflow");
         const { data } = await api.get("/admin/workflow");
-        console.log("✅ [useEffect] Admin workflow fetched:", data);
+        // console.log(" [useEffect] Admin workflow fetched:", data);
 
         const workflowArr = Array.isArray(data?.workflow)
           ? data.workflow
           : (typeof data?.workflow === "string" ? data.workflow.split(/[,\\n]+/) : []);
-        console.log("📋 Normalized workflow array:", workflowArr);
+        // console.log(" Normalized workflow array:", workflowArr);
 
         setAdminWorkflow(workflowArr);
       } catch (err) {
@@ -348,7 +346,7 @@ export default function ApplicationView() {
         console.log("Full error object:", err);
       } finally {
         setLoadingWorkflow(false);
-        console.log("⏹️ [useEffect] Finished loading admin workflow.");
+        // console.log(" [useEffect] Finished loading admin workflow.");
       }
     })();
   }, []);
@@ -947,11 +945,11 @@ export default function ApplicationView() {
             </label>
             <p>{app?.workflowStage || "—"}</p>
 
-          <div style={{ marginTop: 40 }}>
-            <label >
-              <b></b>
-            </label>
-          </div>
+            <div style={{ marginTop: 40 }}>
+              <label >
+                <b></b>
+              </label>
+            </div>
 
             {/* >>> ADDED: Render admin workflow buttons (clean + dedupe + unique keys) */}
             {/* <div style={{ marginTop: 12 }}>

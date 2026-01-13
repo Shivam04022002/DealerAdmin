@@ -169,11 +169,11 @@ export const autoMergeApplications = async () => {
       ]);
 
       if (approved) {
-        console.log(`⛔ Skipping ${formId} — already approved (${approved._id})`);
+        console.log(` Skipping ${formId} — already approved (${approved._id})`);
         continue;
       }
       if (rejected) {
-        console.log(`⛔ Skipping ${formId} — already rejected (${rejected._id})`);
+        console.log(` Skipping ${formId} — already rejected (${rejected._id})`);
         continue;
       }
     } catch (err) {
@@ -208,7 +208,7 @@ export const autoMergeApplications = async () => {
 
     try {
       await Application.create(mergedData);
-      console.log(`✅ Merged ${formId} (dealer=${dealerId})`);
+      console.log(` Merged ${formId} (dealer=${dealerId})`);
     } catch (err) {
       console.error(` Failed to merge ${formId}:`, err.message || err);
     }

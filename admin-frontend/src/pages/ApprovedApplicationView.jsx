@@ -27,7 +27,7 @@ export default function ApprovedApplicationView() {
         const { data } = await api.get(`/workflow/applications/approved/${id}`);
         if (mounted) setApp(data);
       } catch (err) {
-        console.error("❌ Failed to fetch approved application:", err?.response?.data || err.message);
+        console.error(" Failed to fetch approved application:", err?.response?.data || err.message);
       } finally {
         if (mounted) setLoading(false);
       }

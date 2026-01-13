@@ -19,7 +19,7 @@ export const AuthProvider = ({ children }) => {
   });
 
  const login = (adminData) => {
-  console.log("Saving admin data:", adminData);
+  // console.log("Saving admin data:", adminData);
   localStorage.setItem('adminToken', adminData.token);
 
   // Handle both flat and nested admin structures

@@ -20,7 +20,7 @@ const LoginPage = () => {
     try {
       const res = await API.post("/auth/login", { email, password });
       // DEBUG: show full response when debugging
-      console.log("login response (full):", res);
+      // console.log("login response (full):", res);
 
       const body = res?.data;
 

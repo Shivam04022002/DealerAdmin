@@ -78,12 +78,27 @@ async function backfillDealerRef(app) {
 
 /* ---------- controllers ---------- */
 
-// Get single application by id (populate dealer)
+// Get single application by id (populate dealer) - searches pending, rejected, and approved collections
 export const getApplicationById = async (req, res) => {
   try {
-    const app = await Application.findById(req.params.id)
+    // First try to find in pending Applications
+    let app = await Application.findById(req.params.id)
       .populate("dealer", "email userId name district branch")
       .lean();
+
+    // If not found in pending, try rejected collection
+    if (!app) {
+      app = await RejectedApplication.findById(req.params.id)
+        .populate("dealer", "email userId name district branch")
+        .lean();
+    }
+
+    // If still not found, try approved collection
+    if (!app) {
+      app = await ApprovedApplication.findById(req.params.id)
+        .populate("dealer", "email userId name district branch")
+        .lean();
+    }
 
     if (!app) return res.status(404).json({ error: "Application not found" });
     return res.json(app);
@@ -246,7 +261,7 @@ export const updateWorkflowStage = async (req, res) => {
     if (!allowedFinalNames.includes(next)) {
       await backfillDealerRef(app);
       await app.save();
-      
+
       // Log the stage update
       try {
         await ActivityLog.create({
@@ -262,7 +277,7 @@ export const updateWorkflowStage = async (req, res) => {
         console.error("Failed to log stage update:", logErr);
         // Don't block the request if logging fails
       }
-      
+
       return res.json({ message: "Workflow stage updated", workflowStage: app.workflowStage, application: app });
     }
 

@@ -75,7 +75,7 @@ const SuperAdminDashboard = () => {
   const [showDealerPassword, setShowDealerPassword] = useState(false);
 
   // Bulk create dealer form
-  const [bulkDealersText, setBulkDealersText] = useState("");
+  // const [bulkDealersText, setBulkDealersText] = useState("");
   const [bulkCreateMode, setBulkCreateMode] = useState("single"); // "single" or "bulk"
   const [bulkUploadMode, setBulkUploadMode] = useState("text"); // "text" or "excel"
   const [bulkDealersData, setBulkDealersData] = useState([]);
@@ -98,12 +98,12 @@ const SuperAdminDashboard = () => {
   // Update edit form when editingAdmin changes
   useEffect(() => {
     if (editingAdmin) {
-      console.log("========== EDIT ADMIN DEBUG ==========");
-      console.log("Admin name:", editingAdmin.name);
-      console.log("Admin workflows (raw):", editingAdmin.workflows);
-      console.log("Admin workflows type:", typeof editingAdmin.workflows);
-      console.log("Admin workflows isArray:", Array.isArray(editingAdmin.workflows));
-      console.log("Admin workflows JSON:", JSON.stringify(editingAdmin.workflows));
+      // console.log("========== EDIT ADMIN DEBUG ==========");
+      // console.log("Admin name:", editingAdmin.name);
+      // console.log("Admin workflows (raw):", editingAdmin.workflows);
+      // console.log("Admin workflows type:", typeof editingAdmin.workflows);
+      // console.log("Admin workflows isArray:", Array.isArray(editingAdmin.workflows));
+      // console.log("Admin workflows JSON:", JSON.stringify(editingAdmin.workflows));
 
       // Normalize workflows: handle nested arrays and ensure all are strings
       let workflows = [];
@@ -129,7 +129,7 @@ const SuperAdminDashboard = () => {
       if (Array.isArray(editingAdmin.workflows)) {
         // Flatten nested arrays and normalize strings
         const flattened = editingAdmin.workflows.flat(); // Flatten nested arrays like [["contact creation", ...]]
-        console.log("useEffect: flattened workflows:", flattened);
+        // console.log("useEffect: flattened workflows:", flattened);
         
         workflows = flattened
           .map(w => {
@@ -139,7 +139,7 @@ const SuperAdminDashboard = () => {
               console.log(`  Mapping alias: "${normalized}" -> "${workflowAliases[normalized]}"`);
               normalized = workflowAliases[normalized];
             }
-            console.log(`  Processing: "${w}" -> "${normalized}"`);
+            // console.log(`  Processing: "${w}" -> "${normalized}"`);
             return normalized;
           })
           .filter(w => {
@@ -193,12 +193,12 @@ const SuperAdminDashboard = () => {
           .filter(w => w && normalizedAvailable.includes(w));
       }
       
-      console.log("Final processed workflows:", workflows);
-      console.log("Normalized available workflows:", normalizedAvailable);
-      console.log("=====================================");
+      // console.log("Final processed workflows:", workflows);
+      // console.log("Normalized available workflows:", normalizedAvailable);
+      // console.log("=====================================");
 
-      console.log("useEffect: processed workflows (normalized):", workflows);
-      console.log("useEffect: availableWorkflows:", availableWorkflows);
+      // console.log("useEffect: processed workflows (normalized):", workflows);
+      // console.log("useEffect: availableWorkflows:", availableWorkflows);
 
       setEditForm({
         name: editingAdmin.name || "",
@@ -208,7 +208,7 @@ const SuperAdminDashboard = () => {
         selectedWorkflows: workflows,
       });
 
-      console.log("useEffect: edit form updated with selectedWorkflows:", workflows);
+      // console.log("useEffect: edit form updated with selectedWorkflows:", workflows);
     } else {
       // Reset form when not editing
       setEditForm({
@@ -571,11 +571,11 @@ const SuperAdminDashboard = () => {
       return;
     }
 
-    console.log("handleEditAdmin called for:", admin.name);
-    console.log("Full admin object:", admin);
-    console.log("Admin workflows:", admin.workflows);
-    console.log("Admin workflows type:", typeof admin.workflows);
-    console.log("Admin workflows isArray:", Array.isArray(admin.workflows));
+    // console.log("handleEditAdmin called for:", admin.name);
+    // console.log("Full admin object:", admin);
+    // console.log("Admin workflows:", admin.workflows);
+    // console.log("Admin workflows type:", typeof admin.workflows);
+    // console.log("Admin workflows isArray:", Array.isArray(admin.workflows));
 
     // Just set the editing admin - useEffect will handle updating the form
     setEditingAdmin(admin);
@@ -701,43 +701,43 @@ const SuperAdminDashboard = () => {
   };
 
   // Handle text input with ID generation
-  const generateIdsFromText = () => {
-    if (!bulkDealersText.trim()) {
-      alert("Please enter dealer data");
-      return;
-    }
+  // const generateIdsFromText = () => {
+  //   if (!bulkDealersText.trim()) {
+  //     alert("Please enter dealer data");
+  //     return;
+  //   }
 
-    try {
-      const lines = bulkDealersText.trim().split('\n').filter(line => line.trim());
-      const dealers = lines.map((line, index) => {
-        const parts = line.split(',').map(p => p.trim());
-        if (parts.length < 2) {
-          throw new Error(`Line ${index + 1}: Email and password are required`);
-        }
+  //   try {
+  //     const lines = bulkDealersText.trim().split('\n').filter(line => line.trim());
+  //     const dealers = lines.map((line, index) => {
+  //       const parts = line.split(',').map(p => p.trim());
+  //       if (parts.length < 2) {
+  //         throw new Error(`Line ${index + 1}: Email and password are required`);
+  //       }
         
-        // Generate UserId if not provided (parts[2] is empty or missing)
-        let userId = parts[2];
-        if (!userId || userId === "") {
-          userId = generateUserId();
-        }
+  //       // Generate UserId if not provided (parts[2] is empty or missing)
+  //       let userId = parts[2];
+  //       if (!userId || userId === "") {
+  //         userId = generateUserId();
+  //       }
         
-        return {
-          email: parts[0],
-          password: parts[1],
-          UserId: userId,
-          name: parts[3] || "",
-          District: parts[4] || "",
-          Branch: parts[5] || "",
-          Contact: parts[6] || "",
-        };
-      });
+  //       return {
+  //         email: parts[0],
+  //         password: parts[1],
+  //         UserId: userId,
+  //         name: parts[3] || "",
+  //         District: parts[4] || "",
+  //         Branch: parts[5] || "",
+  //         Contact: parts[6] || "",
+  //       };
+  //     });
 
-      setBulkDealersData(dealers);
-      alert(`Successfully generated IDs for ${dealers.length} records`);
-    } catch (err) {
-      alert(err.message);
-    }
-  };
+  //     setBulkDealersData(dealers);
+  //     alert(`Successfully generated IDs for ${dealers.length} records`);
+  //   } catch (err) {
+  //     alert(err.message);
+  //   }
+  // };
 
   const bulkCreateDealers = async (e) => {
     e.preventDefault();
@@ -767,7 +767,7 @@ const SuperAdminDashboard = () => {
         { headers: authHeaders() }
       );
       
-      setBulkDealersText("");
+      // setBulkDealersText("");
       setBulkDealersData([]);
       setNextUserId(1000);
       await fetchDealers();
@@ -935,9 +935,9 @@ const SuperAdminDashboard = () => {
     const selected = normalizedSelected.includes(normalizedWorkflow);
 
     if (isEdit && selected) {
-      console.log(`✅ isWorkflowSelected("${workflow}", edit=true):`, selected);
-      console.log("  normalizedWorkflow:", normalizedWorkflow);
-      console.log("  normalizedSelected:", normalizedSelected);
+      // console.log(`✅ isWorkflowSelected("${workflow}", edit=true):`, selected);
+      // console.log("  normalizedWorkflow:", normalizedWorkflow);
+      // console.log("  normalizedSelected:", normalizedSelected);
     }
 
     return selected;
@@ -1764,10 +1764,10 @@ label > input[type="checkbox"]{
                                          action.action === "REJECT" ? "#ef4444" :
                                          action.action === "UPDATE_STAGE" ? "#2563eb" : "#6b7280"
                                 }}>
-                                  {action.action === "APPROVE" ? "✓ Approved" :
-                                   action.action === "REJECT" ? "✗ Rejected" :
-                                   action.action === "UPDATE_STAGE" ? "→ Updated" :
-                                   action.action === "EDIT_FIELDS" ? "✎ Edited" : action.action}
+                                  {action.action === "APPROVE" ? " Approved" :
+                                   action.action === "REJECT" ? " Rejected" :
+                                   action.action === "UPDATE_STAGE" ? " Updated" :
+                                   action.action === "EDIT_FIELDS" ? " Edited" : action.action}
                                 </span>
                                 <span className="meta" style={{ fontSize: 11 }}>
                                   {new Date(action.at).toLocaleString()}
@@ -2003,13 +2003,13 @@ label > input[type="checkbox"]{
                   
                   {/* Upload Mode Tabs */}
                   <div style={{ display: "flex", gap: "10px", marginBottom: 16 }}>
-                    <button
+                    {/* <button
                       type="button"
                       className={`btn ${bulkUploadMode === "text" ? "btn-primary" : "btn-outline"}`}
                       onClick={() => setBulkUploadMode("text")}
                     >
                       Text Input
-                    </button>
+                    </button> */}
                     <button
                       type="button"
                       className={`btn ${bulkUploadMode === "excel" ? "btn-primary" : "btn-outline"}`}
@@ -2020,7 +2020,7 @@ label > input[type="checkbox"]{
                   </div>
 
                   {/* Text Input Mode */}
-                  {bulkUploadMode === "text" && (
+                  {/* {bulkUploadMode === "text" && (
                     <div>
                       <div className="label" style={{ marginBottom: 8 }}>
                         Format: email,password,UserId,name,District,Branch,Contact (one per line)
@@ -2047,7 +2047,7 @@ label > input[type="checkbox"]{
                         </button>
                       </div>
                     </div>
-                  )}
+                  )} */}
 
                   {/* Excel Upload Mode */}
                   {bulkUploadMode === "excel" && (
@@ -2127,7 +2127,7 @@ label > input[type="checkbox"]{
                           className="btn btn-outline"
                           onClick={() => {
                             setBulkDealersData([]);
-                            setBulkDealersText("");
+                            // setBulkDealersText("");
                             setNextUserId(1000);
                           }}
                           disabled={busy}
@@ -2141,7 +2141,7 @@ label > input[type="checkbox"]{
                   {bulkDealersData.length === 0 && (
                     <div style={{ textAlign: "center", padding: "20px", color: "#999" }}>
                       {bulkUploadMode === "text" 
-                        ? "Enter data and click 'Generate IDs & Preview' to see records"
+                        ? ""
                         : "Upload an Excel file to preview records"
                       }
                     </div>

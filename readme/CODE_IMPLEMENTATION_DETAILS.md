@@ -236,7 +236,7 @@ ${data.results.failed.length} failed`;
    ┌────▼──────────────────▼────┐
    │ "Generate IDs & Preview"   │
    │ button / File upload event │
-   └────┬──────────────────────┘
+   └────┬───────────────────────┘ 
         │
    ┌────▼────────────────────────────────────┐
    │ Parse & Process Data                    │

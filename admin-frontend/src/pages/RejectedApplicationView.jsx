@@ -68,7 +68,7 @@ export default function RejectedApplicationView() {
         <div style={styles.shell}>
             {/* Sidebar */}
             <aside style={styles.sidebar}>
-                <button onClick={() => navigate(-1)} style={styles.backBtn}>← Back</button>
+                <button onClick={() => navigate(-1)} style={styles.backBtn}> Back</button>
 
                 <div style={styles.summaryCard}>
                     <div style={styles.headerLine}>
