@@ -12,14 +12,30 @@ import superadminRoutes from "./routes/superadminRoutes.js";
 
 dotenv.config();
 
-// CORS Configuration
+// CORS Configuration - supports multiple origins (comma-separated in .env)
+const getAllowedOrigins = () => {
+    if (process.env.NODE_ENV !== 'production') {
+        return '*'; // Allow all in development
+    }
+    const origins = process.env.CORS_ORIGIN || 'https://dealer.surjithirepurchase.com';
+    return origins.split(',').map(origin => origin.trim());
+};
+
 const corsOptions = {
-    origin: process.env.NODE_ENV === 'production'
-        ? process.env.CORS_ORIGIN || 'https://yourdomain.com'
-        : '*',
+    origin: (origin, callback) => {
+        const allowedOrigins = getAllowedOrigins();
+        // Allow requests with no origin (like mobile apps or curl)
+        if (!origin) return callback(null, true);
+
+        if (allowedOrigins === '*' || allowedOrigins.includes(origin)) {
+            callback(null, true);
+        } else {
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization','cache-control',]
+    allowedHeaders: ['Content-Type', 'Authorization', 'cache-control']
 };
 
 const app = express();
@@ -89,7 +105,7 @@ const startServer = async () => {
                 console.log('Server closed');
                 process.exit(0);
             });
-        };  
+        };
 
         process.on('SIGTERM', () => shutdown('SIGTERM'));
         process.on('SIGINT', () => shutdown('SIGINT'));
