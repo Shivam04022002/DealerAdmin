@@ -91,7 +91,7 @@ const LoginPage = () => {
   };
   const handleDownloadApk = () => {
   // Temporary placeholder URL (will replace later)
-  const apkUrl = "#";
+  const apkUrl = "https://docs.google.com/uc?export=download&id=1QgGX_N4exbq1E9cznX9K11OqXNbNMr1-";
 
   if (apkUrl === "#") {
     alert("APK download link will be available soon!");

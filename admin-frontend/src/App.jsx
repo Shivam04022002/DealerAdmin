@@ -33,10 +33,11 @@ const App = () => {
       <Route path="/rejected" element={<RejectedFiles />} />
       <Route path="/rejected/:id" element={<RejectedApplicationView />} />
 
+      {/*  Super Admin Dashboard */}
+      <Route path="/superadmin-dashboard" element={<SuperAdminDashboard />} />
+
       {/*  Catch-all fallback */}
       <Route path="*" element={<Navigate to="/" replace />} />
-
-      <Route path="/superadmin-dashboard" element={<SuperAdminDashboard />} />
     </Routes>
   );
 };

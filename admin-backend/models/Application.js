@@ -29,4 +29,13 @@ const applicationSchema = new mongoose.Schema({
   ]
 }, { timestamps: true });
 
+applicationSchema.index({ formId: 1 }, { unique: false, sparse: true });
+applicationSchema.index({ status: 1 });
+applicationSchema.index({ workflowStage: 1 });
+applicationSchema.index({ status: 1, workflowStage: 1 });
+applicationSchema.index({ createdAt: -1 });
+applicationSchema.index({ "dealerDetails.branch": 1 });
+applicationSchema.index({ "dealerDetails.district": 1 });
+applicationSchema.index({ dealer: 1 });
+
 export default mongoose.model("Application", applicationSchema, "applications");

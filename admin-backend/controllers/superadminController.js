@@ -4,8 +4,11 @@ import Admin from "../models/Admin.js";
 import User from "../models/User.js";
 import ActivityLog from "../models/ActivityLog.js";
 import Application from "../models/Application.js";
+import Counter from "../models/Counter.js";
 import ApprovedApplication from "../models/ApprovedApplication.js";
 import RejectedApplication from "../models/RejectedApplication.js";
+import { sendPushNotification } from "../utils/sendPushNotification.js";
+import { createHistoryEntry } from "./formTrackingController.js";
 
 export const createAdmin = async (req, res) => {
   try {
@@ -260,21 +263,21 @@ export const getFilesByType = async (req, res) => {
             { workflowStage: { $nin: ["disbursed", "rejected", "approved"] } }
           ]
         })
-        .select("formId applicant coApplicant vehicleDetails dealer dealerDetails status workflowStage")
+        .select("formId applicant coApplicant vehicleDetails dealer dealerDetails status workflowStage createdAt updatedAt")
         .populate("dealer", "email userId name district branch")
         .lean();
         break;
 
       case "approved":
         applications = await ApprovedApplication.find()
-          .select("formId applicant coApplicant vehicleDetails dealer dealerDetails status workflowStage approvedAt")
+          .select("formId applicant coApplicant vehicleDetails dealer dealerDetails status workflowStage approvedAt createdAt updatedAt")
           .populate("dealer", "email userId name district branch")
           .lean();
         break;
 
       case "rejected":
         applications = await RejectedApplication.find()
-          .select("formId applicant coApplicant vehicleDetails dealer dealerDetails status workflowStage rejectedAt reason")
+          .select("formId applicant coApplicant vehicleDetails dealer dealerDetails status workflowStage rejectedAt reason createdAt updatedAt")
           .populate("dealer", "email userId name district branch")
           .lean();
         break;
@@ -365,9 +368,19 @@ export const getAdminActivity = async (req, res) => {
   }
 };
 
+// Helper to atomically get the next UserId number
+const getNextUserId = async () => {
+  const counter = await Counter.findByIdAndUpdate(
+    { _id: 'userId' },
+    { $inc: { seq: 1 } },
+    { new: true, upsert: true } // Auto-creates if missing
+  );
+  return `SurjitFin#${counter.seq}`;
+};
+
 export const createDealer = async (req, res) => {
   try {
-    const { email, password, UserId, name, District, Branch, Contact } = req.body;
+    const { email, password, name, District, Branch, mobileNumber } = req.body;
     
     if (!email || !password) {
       return res.status(400).json({ message: "Email and password are required" });
@@ -379,14 +392,17 @@ export const createDealer = async (req, res) => {
       return res.status(409).json({ message: "Email already in use" });
     }
 
+    // Auto-generate unique UserId atomically
+    const generatedUserId = await getNextUserId();
+
     const dealer = await User.create({
       email,
       password,
-      UserId,
+      UserId: generatedUserId,
       name,
       District,
       Branch,
-      Contact,
+      mobileNumber,
     });
 
     return res.status(201).json({
@@ -398,7 +414,7 @@ export const createDealer = async (req, res) => {
         name: dealer.name,
         District: dealer.District,
         Branch: dealer.Branch,
-        Contact: dealer.Contact,
+        mobileNumber: dealer.mobileNumber,
       }
     });
   } catch (err) {
@@ -425,7 +441,7 @@ export const bulkCreateDealers = async (req, res) => {
 
     for (const dealerData of dealers) {
       try {
-        const { email, password, UserId, name, District, Branch, Contact } = dealerData;
+        const { email, password, name, District, Branch, mobileNumber } = dealerData;
         
         if (!email || !password) {
           results.failed.push({
@@ -445,14 +461,15 @@ export const bulkCreateDealers = async (req, res) => {
           continue;
         }
 
+        const generatedUserId = await getNextUserId();
         const dealer = await User.create({
           email,
           password,
-          UserId,
+          UserId: generatedUserId,
           name,
           District,
           Branch,
-          Contact,
+          mobileNumber,
         });
 
         results.success.push({
@@ -481,7 +498,7 @@ export const bulkCreateDealers = async (req, res) => {
 
 export const listDealers = async (req, res) => {
   try {
-    const dealers = await User.find({}, "email UserId name District Branch Contact isActive createdAt")
+    const dealers = await User.find({}, "email UserId name District Branch mobileNumber isActive createdAt")
       .sort({ createdAt: -1 })
       .lean();
     
@@ -495,7 +512,7 @@ export const listDealers = async (req, res) => {
 export const updateDealer = async (req, res) => {
   try {
     const { id } = req.params;
-    const { email, password, UserId, name, District, Branch, Contact } = req.body;
+    const { email, password, UserId, name, District, Branch, mobileNumber } = req.body;
 
     const dealer = await User.findById(id);
     if (!dealer) return res.status(404).json({ message: "Dealer not found" });
@@ -514,7 +531,7 @@ export const updateDealer = async (req, res) => {
     if (name !== undefined) dealer.name = name;
     if (District !== undefined) dealer.District = District;
     if (Branch !== undefined) dealer.Branch = Branch;
-    if (Contact !== undefined) dealer.Contact = Contact;
+    if (mobileNumber !== undefined) dealer.mobileNumber = mobileNumber;
     
     // Update password only if provided
     if (password && password.trim() !== "") {
@@ -532,7 +549,7 @@ export const updateDealer = async (req, res) => {
         name: dealer.name,
         District: dealer.District,
         Branch: dealer.Branch,
-        Contact: dealer.Contact,
+        mobileNumber: dealer.mobileNumber,
         isActive: dealer.isActive,
       }
     });
@@ -586,6 +603,80 @@ export const deleteDealer = async (req, res) => {
     return res.json({ message: "Dealer deleted successfully" });
   } catch (err) {
     console.error("deleteDealer:", err);
+    return res.status(500).json({ message: "Server error" });
+  }
+};
+
+export const getDealerLoginActivity = async (req, res) => {
+  try {
+    const { search, status } = req.query;
+    const ONLINE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+    const now = new Date();
+
+    // Build query filter
+    const filter = {};
+    if (search) {
+      const regex = new RegExp(search, "i");
+      filter.$or = [
+        { name: regex },
+        { email: regex },
+        { UserId: regex },
+        { mobileNumber: regex },
+        { Branch: regex },
+      ];
+    }
+
+    const dealers = await User.find(
+      filter,
+      "email UserId name District Branch mobileNumber isActive lastLoginAt lastSeenAt createdAt"
+    )
+      .sort({ lastSeenAt: -1, lastLoginAt: -1, createdAt: -1 })
+      .lean();
+
+    // Compute online/offline status for each dealer
+    const dealersWithStatus = dealers.map((dealer) => {
+      const lastSeen = dealer.lastSeenAt || dealer.lastLoginAt;
+      const isOnline = lastSeen
+        ? now.getTime() - new Date(lastSeen).getTime() < ONLINE_THRESHOLD_MS
+        : false;
+
+      return {
+        ...dealer,
+        isOnline,
+        lastActive: lastSeen || null,
+      };
+    });
+
+    // Filter by status if requested
+    let filtered = dealersWithStatus;
+    if (status === "online") {
+      filtered = dealersWithStatus.filter((d) => d.isOnline);
+    } else if (status === "offline") {
+      filtered = dealersWithStatus.filter((d) => !d.isOnline);
+    }
+
+    // Sort: online dealers first, then by most recently active
+    filtered.sort((a, b) => {
+      if (a.isOnline && !b.isOnline) return -1;
+      if (!a.isOnline && b.isOnline) return 1;
+      const aTime = a.lastActive ? new Date(a.lastActive).getTime() : 0;
+      const bTime = b.lastActive ? new Date(b.lastActive).getTime() : 0;
+      return bTime - aTime;
+    });
+
+    const onlineCount = dealersWithStatus.filter((d) => d.isOnline).length;
+    const offlineCount = dealersWithStatus.filter((d) => !d.isOnline).length;
+
+    return res.json({
+      dealers: filtered,
+      stats: {
+        total: dealersWithStatus.length,
+        online: onlineCount,
+        offline: offlineCount,
+      },
+    });
+  } catch (err) {
+    console.error("getDealerLoginActivity:", err);
     return res.status(500).json({ message: "Server error" });
   }
 };
@@ -662,6 +753,29 @@ export const revokeRejectedApplication = async (req, res) => {
     } catch (logErr) {
       console.error("revokeRejectedApplication: failed to log activity", logErr);
       // Do not block success if logging fails
+    }
+
+    // Audit history entry
+    await createHistoryEntry({
+      applicationId: pendingApp._id,
+      formId: pendingApp.formId,
+      actionType: "REVOKED",
+      oldValue: "rejected",
+      newValue: "pending",
+      remarks: "Rejection revoked — moved back to pending by superadmin",
+      updatedBy: (req.admin && (req.admin.name || req.admin.email)) || "superadmin",
+      updatedByRole: req.admin?.role || "superadmin",
+      updatedByAdminId: req.admin?._id || req.admin?.id || null,
+    });
+
+    if (dealerId) {
+      await sendPushNotification(
+        dealerId,
+        "Application Rejection Revoked",
+        "Your rejected application has been moved back to pending for re-evaluation.",
+        "updated",
+        pendingApp.formId
+      );
     }
 
     return res.json({

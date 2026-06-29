@@ -39,7 +39,7 @@ export default function Navbar() {
     <header style={styles.wrap}>
       <div style={styles.left}>
         <Link
-          to="/dashboard"
+          to={admin?.role === "superadmin" ? "/superadmin-dashboard" : "/dashboard"}
           style={{ display: "inline-flex", alignItems: "center", gap: 10, textDecoration: "none" }}
         >
           <img src={logo} alt="Surjit Finance" style={styles.logo} />
@@ -47,17 +47,25 @@ export default function Navbar() {
       </div>
 
       {/* Dashboard-like segmented nav */}
-      <nav style={styles.nav}>
-        <button onClick={() => navigate("/dashboard")} style={styles.linkBtn}>
-          Pending
-        </button>
-        <button onClick={() => goToDashboardFocus("approved")} style={styles.linkBtn}>
-          Approved
-        </button>
-        <button onClick={() => goToDashboardFocus("rejected")} style={styles.linkBtn}>
-          Rejected
-        </button>
-      </nav>
+      {admin?.role !== "superadmin" ? (
+        <nav style={styles.nav}>
+          <button onClick={() => navigate("/dashboard")} style={styles.linkBtn}>
+            Pending
+          </button>
+          <button onClick={() => goToDashboardFocus("approved")} style={styles.linkBtn}>
+            Approved
+          </button>
+          <button onClick={() => goToDashboardFocus("rejected")} style={styles.linkBtn}>
+            Rejected
+          </button>
+        </nav>
+      ) : (
+        <nav style={styles.nav}>
+          <button onClick={() => navigate("/superadmin-dashboard")} style={styles.linkBtn}>
+            ← Back to Super Admin
+          </button>
+        </nav>
+      )}
 
       {/* User dropdown menu */}
       <div style={styles.right}>

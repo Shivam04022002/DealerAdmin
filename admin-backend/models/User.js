@@ -11,11 +11,17 @@ const userSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
-  UserId: String, // userId pattern for dealer 
+  UserId: {
+    type: String,
+    unique: true
+  }, // userId pattern for dealer
   name: String,
   District: String,
   Branch: String,
-  Contact: String,
+  mobileNumber: { type: String, default: "" },
+  profilePicture: { type: String, default: "" },
+  lastLoginAt: { type: Date, default: null },
+  lastSeenAt: { type: Date, default: null },
   isActive: {
     type: Boolean,
     default: true,

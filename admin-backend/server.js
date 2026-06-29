@@ -8,6 +8,8 @@ import workflowRoutes from './routes/workflowRoutes.js';
 import vehicleRoutes from './routes/vehicleRoutes.js';
 import authRoutes from "./routes/authRoutes.js";
 import superadminRoutes from "./routes/superadminRoutes.js";
+import formTrackingRoutes from "./routes/formTrackingRoutes.js";
+import { autoMergeApplications } from "./services/autoMergeService.js";
 // import mergeRoutes from './routes/mergeRoutes.js';
 
 dotenv.config();
@@ -17,7 +19,7 @@ const getAllowedOrigins = () => {
     if (process.env.NODE_ENV !== 'production') {
         return '*'; // Allow all in development
     }
-    const origins = process.env.CORS_ORIGIN || 'https://dealer.surjithirepurchase.com';
+    const origins = process.env.CORS_ORIGIN || 'https://dealer.surjitfinance.com';
     return origins.split(',').map(origin => origin.trim());
 };
 
@@ -56,6 +58,21 @@ app.set('trust proxy', 1);
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 
+// Query timing + response-size middleware
+app.use((req, res, next) => {
+    const t0 = Date.now();
+    const originalJson = res.json.bind(res);
+    res.json = (body) => {
+        const ms = Date.now() - t0;
+        const bytes = Buffer.byteLength(JSON.stringify(body), 'utf8');
+        if (ms > 200 || bytes > 50000) {
+            console.log(`[API] ${req.method} ${req.path} → ${ms}ms  ${(bytes / 1024).toFixed(1)}KB`);
+        }
+        return originalJson(body);
+    };
+    next();
+});
+
 // Health check endpoint (for monitoring)
 app.get('/api/health', (req, res) => {
     res.status(200).json({
@@ -71,6 +88,7 @@ app.use('/api/workflow', workflowRoutes);
 app.use('/api/vehicles', vehicleRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/superadmin", superadminRoutes);
+app.use("/api/form-tracking", formTrackingRoutes);
 // app.use('/api/merge', mergeRoutes);
 
 // 404 handler
@@ -96,6 +114,13 @@ const startServer = async () => {
         await connectDB();
         const server = app.listen(PORT, () => {
             console.log(`Server running in ${process.env.NODE_ENV || 'development'} mode on port ${PORT}`);
+        });
+
+        // Run autoMerge once in the background after startup — never blocks requests
+        setImmediate(() => {
+            autoMergeApplications()
+                .then(() => console.log('[autoMerge] Background merge complete'))
+                .catch((err) => console.error('[autoMerge] Background merge failed:', err.message));
         });
 
         // Graceful shutdown

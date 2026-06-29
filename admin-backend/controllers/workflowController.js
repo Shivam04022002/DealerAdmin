@@ -3,8 +3,9 @@ import Application from "../models/Application.js";
 import ApprovedApplication from "../models/ApprovedApplication.js";
 import RejectedApplication from "../models/RejectedApplication.js";
 import ActivityLog from "../models/ActivityLog.js";
-import { autoMergeApplications } from "../services/autoMergeService.js";
 import User from "../models/User.js";
+import { sendPushNotification } from "../utils/sendPushNotification.js";
+import { createHistoryEntry } from "./formTrackingController.js";
 
 /* ---------- helpers ---------- */
 
@@ -123,11 +124,10 @@ export const getPendingApplicationById = async (req, res) => {
   }
 };
 
-// Get all pending applications (auto-merge first), populate dealer
+// Get all pending applications — summary fields only, no populate, no autoMerge on hot path
 export const getPendingApplications = async (req, res) => {
+  const t0 = Date.now();
   try {
-    await autoMergeApplications();
-
     // defensive normalization of admin workflows
     const cleaned = normalizeWorkflows(req.admin?.workflows || []);
 
@@ -142,27 +142,25 @@ export const getPendingApplications = async (req, res) => {
 
     // Apply admin workflow restriction only if admin has an explicit list
     if (cleaned.length > 0) {
-      // Allow applications that are either:
-      // 1. At workflow stages the admin has access to, OR
-      // 2. Don't have a workflowStage yet (new applications)
       filter = {
         $and: [
-          filter, // Keep the pending-like filter
+          filter,
           {
             $or: [
-              { workflowStage: { $exists: false } }, // New applications without workflowStage
-              { workflowStage: { $in: cleaned } },   // Applications at stages admin can access
+              { workflowStage: { $exists: false } },
+              { workflowStage: { $in: cleaned } },
             ]
           }
         ]
       };
     }
 
+    // Summary fields only — no history, no coApplicant blob, no populate
     const applications = await Application.find(filter)
-      .select("formId applicant coApplicant vehicleDetails dealer dealerDetails status workflowStage history")
-      .populate("dealer", "email userId name district branch")
+      .select("formId applicant dealerDetails status workflowStage createdAt updatedAt")
       .lean();
 
+    console.log(`[PERF] getPendingApplications: ${applications.length} docs in ${Date.now() - t0}ms`);
     return res.json(applications);
   } catch (err) {
     console.error("getPendingApplications error:", err);
@@ -278,6 +276,29 @@ export const updateWorkflowStage = async (req, res) => {
         // Don't block the request if logging fails
       }
 
+      // Audit history entry
+      await createHistoryEntry({
+        applicationId: app._id,
+        formId: app.formId,
+        actionType: "STAGE_CHANGED",
+        oldValue: current || null,
+        newValue: nextWorkflowStage,
+        remarks: `Stage advanced from ${current || "—"} to ${nextWorkflowStage}`,
+        updatedBy: (req.admin && (req.admin.name || req.admin.email)) || "admin",
+        updatedByRole: req.admin?.role || "admin",
+        updatedByAdminId: req.admin?._id || req.admin?.id || null,
+      });
+
+      if (app.dealer) {
+        await sendPushNotification(
+          app.dealer,
+          "Application Stage Updated",
+          `Your application stage was updated to ${nextWorkflowStage}.`,
+          "updated",
+          app.formId
+        );
+      }
+
       return res.json({ message: "Workflow stage updated", workflowStage: app.workflowStage, application: app });
     }
 
@@ -303,6 +324,19 @@ export const updateWorkflowStage = async (req, res) => {
       // Don't block the request if logging fails
     }
 
+    // Audit history entry
+    await createHistoryEntry({
+      applicationId: app._id,
+      formId: app.formId,
+      actionType: "APPROVED",
+      oldValue: app.workflowStage || null,
+      newValue: "disbursement",
+      remarks: "Application approved and moved to disbursement",
+      updatedBy: (req.admin && (req.admin.name || req.admin.email)) || "admin",
+      updatedByRole: req.admin?.role || "admin",
+      updatedByAdminId: req.admin?._id || req.admin?.id || null,
+    });
+
     const exists = await ApprovedApplication.findOne({ formId: app.formId }).lean();
     if (!exists) {
       await ApprovedApplication.create({
@@ -319,6 +353,16 @@ export const updateWorkflowStage = async (req, res) => {
     }
 
     await Application.findByIdAndDelete(id);
+
+    if (app.dealer) {
+      await sendPushNotification(
+        app.dealer,
+        "Application Approved",
+        "Your application has been approved and moved to disbursement.",
+        "approved",
+        app.formId
+      );
+    }
 
     return res.json({ message: "Application approved and moved to Approved collection" });
   } catch (err) {
@@ -355,6 +399,19 @@ export const approveApplication = async (req, res) => {
       // Don't block the request if logging fails
     }
 
+    // Audit history entry
+    await createHistoryEntry({
+      applicationId: app._id,
+      formId: app.formId,
+      actionType: "APPROVED",
+      oldValue: app.workflowStage || null,
+      newValue: "disbursement",
+      remarks: req.body?.note || "Application approved via admin UI",
+      updatedBy: (req.admin && (req.admin.name || req.admin.email)) || "admin",
+      updatedByRole: req.admin?.role || "admin",
+      updatedByAdminId: req.admin?._id || req.admin?.id || null,
+    });
+
     const exists = await ApprovedApplication.findOne({ formId: app.formId }).lean();
     if (!exists) {
       await ApprovedApplication.create({
@@ -378,6 +435,18 @@ export const approveApplication = async (req, res) => {
     }
 
     await Application.findByIdAndDelete(id);
+    
+    // Notify the user natively
+    if (app.dealer) {
+      await sendPushNotification(
+        app.dealer,
+        "Application Approved",
+        "Your application has been approved.",
+        "approved",
+        app.formId
+      );
+    }
+
     return res.json({ message: "Application approved and moved" });
   } catch (err) {
     console.error("approveApplication error:", err);
@@ -410,6 +479,19 @@ export const rejectApplication = async (req, res) => {
       // Don't block the request if logging fails
     }
 
+    // Audit history entry
+    await createHistoryEntry({
+      applicationId: app._id,
+      formId: app.formId,
+      actionType: "REJECTED",
+      oldValue: app.workflowStage || null,
+      newValue: "rejected",
+      remarks: req.body?.note || reason || "Application rejected",
+      updatedBy: (req.admin && (req.admin.name || req.admin.email)) || "admin",
+      updatedByRole: req.admin?.role || "admin",
+      updatedByAdminId: req.admin?._id || req.admin?.id || null,
+    });
+
     const rejectedDoc = new RejectedApplication({
       ...app.toObject(),
       status: "rejected",
@@ -423,6 +505,17 @@ export const rejectApplication = async (req, res) => {
     await rejectedDoc.save();
     await Application.findByIdAndDelete(id);
 
+    await backfillDealerRef(app);
+    if (app.dealer) {
+      await sendPushNotification(
+        app.dealer,
+        "Application Rejected",
+        req.body?.note || reason || "Your application was rejected.",
+        "rejected",
+        app.formId
+      );
+    }
+
     return res.json({ message: "Application moved to Rejected collection" });
   } catch (err) {
     console.error("rejectApplication error:", err);
@@ -430,12 +523,14 @@ export const rejectApplication = async (req, res) => {
   }
 };
 
-// List approved applications
+// List approved applications — summary fields only, no populate
 export const getApprovedApplications = async (_req, res) => {
+  const t0 = Date.now();
   try {
     const approvedApps = await ApprovedApplication.find()
-      .populate("dealer", "name email branch district")
+      .select("formId applicant dealerDetails status workflowStage createdAt updatedAt")
       .lean();
+    console.log(`[PERF] getApprovedApplications: ${approvedApps.length} docs in ${Date.now() - t0}ms`);
     res.json(approvedApps);
   } catch (err) {
     console.error("getApprovedApplications error:", err);
@@ -461,13 +556,14 @@ export const getApprovedApplicationById = async (req, res) => {
   }
 };
 
-// List rejected applications
+// List rejected applications — summary fields only, no populate
 export const getRejectedApplications = async (_req, res) => {
+  const t0 = Date.now();
   try {
     const items = await RejectedApplication.find()
-      .select("formId applicant coApplicant vehicleDetails dealer dealerDetails status workflowStage history createdAt updatedAt")
-      .populate("dealer", "email userId name district branch")
+      .select("formId applicant dealerDetails status workflowStage createdAt updatedAt rejection")
       .lean();
+    console.log(`[PERF] getRejectedApplications: ${items.length} docs in ${Date.now() - t0}ms`);
     res.json(items);
   } catch (err) {
     console.error("getRejectedApplications error:", err);

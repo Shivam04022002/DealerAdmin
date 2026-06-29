@@ -1,11 +1,521 @@
 // src/pages/SuperAdminDashboard.jsx
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import API from "../services/api"; // baseURL already set in your project
 import { useAuth } from "../context/AuthContext";
 import { useNavigate } from "react-router-dom";
 import logo from "../assets/logo-surjit.png";
 import * as XLSX from 'xlsx';
+import FilesManagementTable from "../components/FilesManagementTable";
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  PieChart, Pie, Cell, Legend, Customized,
+} from "recharts";
+import { exportApplicationsToExcel, exportAllToExcel } from "../utils/exportApplications";
+import FormTrackingAudit from "../components/FormTrackingAudit";
+import DealerManagementTable from "../components/DealerManagementTable";
+// ─────────────────────────────────────────────
+// Modern Stats Dashboard Component
+// ─────────────────────────────────────────────
+const BRAND = {
+  blue: "#0B1F4D",
+  orange: "#F59E0B",
+  green: "#16A34A",
+  red: "#EF4444",
+  bg: "#F8FAFC",
+};
 
+const PIE_COLORS = [BRAND.orange, BRAND.green, BRAND.red];
+
+const iconClock = (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
+  </svg>
+);
+const iconCheck = (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" /><polyline points="22 4 12 14.01 9 11.01" />
+  </svg>
+);
+const iconX = (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="10" /><line x1="15" y1="9" x2="9" y2="15" /><line x1="9" y1="9" x2="15" y2="15" />
+  </svg>
+);
+const iconFile = (
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" />
+  </svg>
+);
+const iconRefresh = (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" />
+    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+  </svg>
+);
+const iconDownload = (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" />
+  </svg>
+);
+
+const CustomBarLabel = ({ x, y, width, value }) => {
+  if (!value) return null;
+  return (
+    <text x={x + width / 2} y={y - 6} fill="#374151" fontSize={13} fontWeight={700} textAnchor="middle">
+      {value}
+    </text>
+  );
+};
+
+const DonutCenterLabel = ({ formattedGraphicalItems, total }) => {
+  const pie = formattedGraphicalItems?.[0];
+  if (!pie) return null;
+  const cx = pie.props.cx;
+  const cy = pie.props.cy;
+  return (
+    <g>
+      <text x={cx} y={cy - 8} textAnchor="middle" fill={BRAND.blue} fontSize={28} fontWeight={900}>{total}</text>
+      <text x={cx} y={cy + 16} textAnchor="middle" fill="#6B7280" fontSize={12} fontWeight={600}>Total</text>
+    </g>
+  );
+};
+
+// ── Date utility helpers ────────────────────────────────────────────────────
+const startOfDay = (d) => { const r = new Date(d); r.setHours(0,0,0,0); return r; };
+const endOfDay   = (d) => { const r = new Date(d); r.setHours(23,59,59,999); return r; };
+const todayStart = () => startOfDay(new Date());
+const todayEnd   = () => endOfDay(new Date());
+
+const QUICK_FILTERS = [
+  { key: "today",      label: "Today" },
+  { key: "yesterday",  label: "Yesterday" },
+  { key: "last7",      label: "Last 7 Days" },
+  { key: "last30",     label: "Last 30 Days" },
+  { key: "thisMonth",  label: "This Month" },
+  { key: "lastMonth",  label: "Last Month" },
+  { key: "custom",     label: "Custom Range" },
+  { key: "all",        label: "All Time" },
+];
+
+const getFilterRange = (key) => {
+  const now = new Date();
+  switch (key) {
+    case "today":
+      return { from: todayStart(), to: todayEnd() };
+    case "yesterday": {
+      const y = new Date(now); y.setDate(y.getDate() - 1);
+      return { from: startOfDay(y), to: endOfDay(y) };
+    }
+    case "last7": {
+      const d = new Date(now); d.setDate(d.getDate() - 6);
+      return { from: startOfDay(d), to: todayEnd() };
+    }
+    case "last30": {
+      const d = new Date(now); d.setDate(d.getDate() - 29);
+      return { from: startOfDay(d), to: todayEnd() };
+    }
+    case "thisMonth": {
+      const d = new Date(now.getFullYear(), now.getMonth(), 1);
+      return { from: startOfDay(d), to: todayEnd() };
+    }
+    case "lastMonth": {
+      const first = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const last  = new Date(now.getFullYear(), now.getMonth(), 0);
+      return { from: startOfDay(first), to: endOfDay(last) };
+    }
+    case "all":
+    default:
+      return { from: null, to: null };
+  }
+};
+
+const fmtRangeLabel = (from, to) => {
+  if (!from && !to) return "All Time";
+  const opts = { day: "2-digit", month: "short", year: "numeric" };
+  const f = from ? new Date(from).toLocaleDateString("en-IN", opts) : "—";
+  const t = to   ? new Date(to).toLocaleDateString("en-IN", opts)   : "—";
+  if (f === t) return f;
+  return `${f} – ${t}`;
+};
+
+const applyDateFilter = (apps, from, to) => {
+  if (!from && !to) return apps;
+  return apps.filter((app) => {
+    const d = app?.createdAt ? new Date(app.createdAt) : null;
+    if (!d) return false;
+    if (from && d < from) return false;
+    if (to   && d > to)   return false;
+    return true;
+  });
+};
+
+// ── StatsDashboard ──────────────────────────────────────────────────────────
+const StatsDashboard = ({ fetchStats, fetchAllFiles, setTab, setFilesTab }) => {
+  // Raw full data fetched once
+  const [rawData, setRawData] = React.useState({ pending: [], approved: [], rejected: [], loaded: false });
+  const [loadingData, setLoadingData] = React.useState(false);
+
+  // Active quick-filter key
+  const [filterKey, setFilterKey] = React.useState("all");
+  // Custom date inputs (string yyyy-mm-dd)
+  const [customFrom, setCustomFrom] = React.useState("");
+  const [customTo,   setCustomTo]   = React.useState("");
+  // Resolved range dates (Date objects or null)
+  const [rangeFrom, setRangeFrom] = React.useState(null);
+  const [rangeTo,   setRangeTo]   = React.useState(null);
+
+  const [exporting, setExporting] = React.useState({ pending: false, approved: false, rejected: false, all: false });
+
+  // ── Fetch all data once ──────────────────────────────────────────────────
+  const fetchAllData = React.useCallback(async () => {
+    setLoadingData(true);
+    try {
+      const token = localStorage.getItem("adminToken");
+      const headers = token ? { Authorization: `Bearer ${token}` } : {};
+      const [p, a, r] = await Promise.all([
+        API.get("/superadmin/files/pending",  { headers }),
+        API.get("/superadmin/files/approved", { headers }),
+        API.get("/superadmin/files/rejected", { headers }),
+      ]);
+      setRawData({
+        pending:  Array.isArray(p.data) ? p.data : [],
+        approved: Array.isArray(a.data) ? a.data : [],
+        rejected: Array.isArray(r.data) ? r.data : [],
+        loaded: true,
+      });
+    } catch (err) {
+      console.error("Failed to load stats data", err?.response?.data || err.message);
+      setRawData({ pending: [], approved: [], rejected: [], loaded: true });
+    } finally {
+      setLoadingData(false);
+    }
+  }, []);
+
+  React.useEffect(() => { fetchAllData(); }, [fetchAllData]);
+
+  // ── Apply quick filter ───────────────────────────────────────────────────
+  const applyQuickFilter = (key) => {
+    setFilterKey(key);
+    if (key !== "custom") {
+      const { from, to } = getFilterRange(key);
+      setRangeFrom(from);
+      setRangeTo(to);
+    }
+  };
+
+  // ── Apply custom range ───────────────────────────────────────────────────
+  const applyCustomRange = () => {
+    if (!customFrom && !customTo) return;
+    setRangeFrom(customFrom ? startOfDay(new Date(customFrom)) : null);
+    setRangeTo(customTo   ? endOfDay(new Date(customTo))   : null);
+  };
+
+  // ── Filtered data ────────────────────────────────────────────────────────
+  const filteredPending  = React.useMemo(() => applyDateFilter(rawData.pending,  rangeFrom, rangeTo), [rawData.pending,  rangeFrom, rangeTo]);
+  const filteredApproved = React.useMemo(() => applyDateFilter(rawData.approved, rangeFrom, rangeTo), [rawData.approved, rangeFrom, rangeTo]);
+  const filteredRejected = React.useMemo(() => applyDateFilter(rawData.rejected, rangeFrom, rangeTo), [rawData.rejected, rangeFrom, rangeTo]);
+
+  const pending  = filteredPending.length;
+  const approved = filteredApproved.length;
+  const rejected = filteredRejected.length;
+  const total    = pending + approved + rejected;
+
+  const barData = [
+    { name: "Pending",  value: pending,  fill: BRAND.orange },
+    { name: "Approved", value: approved, fill: BRAND.green  },
+    { name: "Rejected", value: rejected, fill: BRAND.red    },
+  ];
+  const pieData = barData.filter((d) => d.value > 0);
+
+  const rangeLabel = fmtRangeLabel(rangeFrom, rangeTo);
+
+  // ── Export handlers ──────────────────────────────────────────────────────
+  const handleExport = (status) => {
+    setExporting((prev) => ({ ...prev, [status]: true }));
+    try {
+      const map = { pending: filteredPending, approved: filteredApproved, rejected: filteredRejected };
+      exportApplicationsToExcel(map[status], status, rangeFrom, rangeTo);
+    } catch (err) {
+      alert("Export failed: " + err.message);
+    } finally {
+      setExporting((prev) => ({ ...prev, [status]: false }));
+    }
+  };
+
+  const handleExportAll = () => {
+    setExporting((prev) => ({ ...prev, all: true }));
+    try {
+      exportAllToExcel(filteredPending, filteredApproved, filteredRejected, rangeFrom, rangeTo);
+    } catch (err) {
+      alert("Export failed: " + err.message);
+    } finally {
+      setExporting((prev) => ({ ...prev, all: false }));
+    }
+  };
+
+  const kpiCards = [
+    { label: "Pending Applications",  value: pending,  icon: iconClock, accent: BRAND.orange, bg: "#FFFBEB", border: "#FEF3C7", onClick: () => { setTab("files"); setFilesTab("pending");  fetchAllFiles("pending");  } },
+    { label: "Approved Applications", value: approved, icon: iconCheck, accent: BRAND.green,  bg: "#F0FDF4", border: "#DCFCE7", onClick: () => { setTab("files"); setFilesTab("approved"); fetchAllFiles("approved"); } },
+    { label: "Rejected Applications", value: rejected, icon: iconX,     accent: BRAND.red,    bg: "#FFF1F2", border: "#FFE4E6", onClick: () => { setTab("files"); setFilesTab("rejected"); fetchAllFiles("rejected"); } },
+    { label: "Total Applications",    value: total,    icon: iconFile,  accent: BRAND.blue,   bg: "#EFF6FF", border: "#DBEAFE", onClick: null },
+  ];
+
+  return (
+    <div style={{ fontFamily: "inherit" }}>
+      <style>{`
+        .stats-kpi-grid {
+          display: grid;
+          grid-template-columns: repeat(4, 1fr);
+          gap: 16px;
+          margin-bottom: 20px;
+        }
+        @media (max-width: 1100px) { .stats-kpi-grid { grid-template-columns: repeat(2, 1fr); } }
+        @media (max-width: 600px)  { .stats-kpi-grid { grid-template-columns: 1fr; } }
+
+        .stats-charts-grid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 16px;
+          margin-bottom: 20px;
+        }
+        @media (max-width: 900px) { .stats-charts-grid { grid-template-columns: 1fr; } }
+
+        .stats-kpi-card {
+          background: #fff; border-radius: 16px; border: 1px solid #E5E7EB;
+          box-shadow: 0 2px 12px rgba(11,31,77,0.07); padding: 20px 22px;
+          cursor: pointer; transition: transform 0.18s ease, box-shadow 0.18s ease;
+          display: flex; flex-direction: column; gap: 10px;
+          position: relative; overflow: hidden;
+        }
+        .stats-kpi-card:hover { transform: translateY(-3px); box-shadow: 0 8px 28px rgba(11,31,77,0.13); }
+        .stats-kpi-card.no-click { cursor: default; }
+        .stats-kpi-card.no-click:hover { transform: none; box-shadow: 0 2px 12px rgba(11,31,77,0.07); }
+
+        .stats-chart-card {
+          background: #fff; border-radius: 16px; border: 1px solid #E5E7EB;
+          box-shadow: 0 2px 12px rgba(11,31,77,0.07); padding: 22px 24px;
+        }
+        .stats-chart-title { font-size: 15px; font-weight: 800; color: #0B1F4D; margin-bottom: 2px; letter-spacing: -0.2px; }
+        .stats-chart-subtitle { font-size: 12px; color: #9CA3AF; font-weight: 500; margin-bottom: 16px; }
+
+        .stats-header-row {
+          display: flex; justify-content: space-between; align-items: flex-start;
+          margin-bottom: 16px; flex-wrap: wrap; gap: 12px;
+        }
+        .stats-export-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+        .stats-export-btn {
+          display: inline-flex; align-items: center; gap: 6px; padding: 9px 14px;
+          border-radius: 10px; font-size: 13px; font-weight: 700; cursor: pointer;
+          border: 1.5px solid transparent;
+          transition: opacity 0.15s ease, transform 0.15s ease; white-space: nowrap;
+        }
+        .stats-export-btn:hover { opacity: 0.88; transform: translateY(-1px); }
+        .stats-export-btn:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
+        .stats-refresh-btn {
+          display: inline-flex; align-items: center; gap: 6px; padding: 9px 14px;
+          border-radius: 10px; font-size: 13px; font-weight: 700; cursor: pointer;
+          background: #fff; border: 1.5px solid #E5E7EB; color: #0B1F4D;
+          transition: background 0.15s ease, transform 0.15s ease;
+        }
+        .stats-refresh-btn:hover { background: #F1F5F9; transform: translateY(-1px); }
+
+        /* Filter bar */
+        .stats-filter-card {
+          background: #fff; border-radius: 16px; border: 1px solid #E5E7EB;
+          box-shadow: 0 2px 12px rgba(11,31,77,0.07); padding: 18px 22px; margin-bottom: 18px;
+        }
+        .stats-filter-label {
+          font-size: 11px; font-weight: 700; color: #9CA3AF; text-transform: uppercase;
+          letter-spacing: 0.8px; margin-bottom: 10px;
+        }
+        .stats-pills { display: flex; flex-wrap: wrap; gap: 8px; }
+        .stats-pill {
+          padding: 6px 14px; border-radius: 999px; font-size: 13px; font-weight: 600;
+          cursor: pointer; border: 1.5px solid #E5E7EB; background: #F8FAFC; color: #374151;
+          transition: all 0.15s ease; white-space: nowrap;
+        }
+        .stats-pill:hover { border-color: #0B1F4D; color: #0B1F4D; background: #EFF6FF; }
+        .stats-pill.active {
+          background: #0B1F4D; color: #fff; border-color: #0B1F4D;
+          box-shadow: 0 2px 8px rgba(11,31,77,0.25);
+        }
+        .stats-custom-row {
+          display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 14px;
+          padding-top: 14px; border-top: 1px solid #F1F5F9;
+        }
+        .stats-date-input {
+          padding: 8px 12px; border-radius: 10px; border: 1.5px solid #E5E7EB;
+          font-size: 13px; font-weight: 500; color: #374151; background: #F8FAFC;
+          outline: none; transition: border-color 0.15s;
+        }
+        .stats-date-input:focus { border-color: #0B1F4D; background: #fff; }
+        .stats-apply-btn {
+          padding: 8px 18px; border-radius: 10px; background: #0B1F4D; color: #fff;
+          font-size: 13px; font-weight: 700; border: none; cursor: pointer;
+          transition: opacity 0.15s, transform 0.15s;
+        }
+        .stats-apply-btn:hover { opacity: 0.88; transform: translateY(-1px); }
+        .stats-range-badge {
+          display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px;
+          background: #EFF6FF; border: 1px solid #BFDBFE; border-radius: 999px;
+          font-size: 12px; font-weight: 600; color: #1D4ED8; margin-top: 10px;
+        }
+
+        .kpi-icon-wrap { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 12px; }
+        .kpi-count { font-size: 36px; font-weight: 900; line-height: 1; letter-spacing: -1px; }
+        .kpi-label { font-size: 13px; font-weight: 600; color: #6B7280; }
+        .kpi-accent-bar { position: absolute; bottom: 0; left: 0; right: 0; height: 3px; border-radius: 0 0 16px 16px; }
+      `}</style>
+
+      {/* ── Header ─────────────────────────────────────────────────────────── */}
+      <div className="stats-header-row">
+        <div>
+          <div style={{ fontSize: 22, fontWeight: 900, color: BRAND.blue, letterSpacing: "-0.5px" }}>
+            Application Statistics
+          </div>
+          <div style={{ fontSize: 13, color: "#6B7280", marginTop: 3, fontWeight: 500 }}>
+            Real-time overview of application status
+          </div>
+        </div>
+        <div className="stats-export-row">
+          <button className="stats-refresh-btn" onClick={fetchAllData} title="Refresh">
+            {iconRefresh} Refresh
+          </button>
+          <button className="stats-export-btn" style={{ background: "#FFFBEB", borderColor: "#FDE68A", color: "#92400E" }}
+            onClick={() => handleExport("pending")} disabled={exporting.pending}>
+            {iconDownload} {exporting.pending ? "Exporting…" : "Export Pending"}
+          </button>
+          <button className="stats-export-btn" style={{ background: "#F0FDF4", borderColor: "#BBF7D0", color: "#14532D" }}
+            onClick={() => handleExport("approved")} disabled={exporting.approved}>
+            {iconDownload} {exporting.approved ? "Exporting…" : "Export Approved"}
+          </button>
+          <button className="stats-export-btn" style={{ background: "#FFF1F2", borderColor: "#FECDD3", color: "#7F1D1D" }}
+            onClick={() => handleExport("rejected")} disabled={exporting.rejected}>
+            {iconDownload} {exporting.rejected ? "Exporting…" : "Export Rejected"}
+          </button>
+          <button className="stats-export-btn" style={{ background: "#EFF6FF", borderColor: "#BFDBFE", color: "#1D4ED8" }}
+            onClick={handleExportAll} disabled={exporting.all}>
+            {iconDownload} {exporting.all ? "Exporting…" : "Export All"}
+          </button>
+        </div>
+      </div>
+
+      {/* ── Date Filter Bar ─────────────────────────────────────────────────── */}
+      <div className="stats-filter-card">
+        <div className="stats-filter-label">Date Filter</div>
+        <div className="stats-pills">
+          {QUICK_FILTERS.map((f) => (
+            <button
+              key={f.key}
+              className={`stats-pill${filterKey === f.key ? " active" : ""}`}
+              onClick={() => applyQuickFilter(f.key)}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+
+        {filterKey === "custom" && (
+          <div className="stats-custom-row">
+            <label style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>From</label>
+            <input type="date" className="stats-date-input" value={customFrom}
+              onChange={(e) => setCustomFrom(e.target.value)} />
+            <label style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>To</label>
+            <input type="date" className="stats-date-input" value={customTo}
+              onChange={(e) => setCustomTo(e.target.value)} />
+            <button className="stats-apply-btn" onClick={applyCustomRange}>Apply</button>
+          </div>
+        )}
+
+        <div style={{ marginTop: 10 }}>
+          <span className="stats-range-badge">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+            Showing data for: <strong>{rangeLabel}</strong>
+          </span>
+        </div>
+      </div>
+
+      {/* ── Loading ─────────────────────────────────────────────────────────── */}
+      {loadingData ? (
+        <div style={{ textAlign: "center", padding: "60px 20px", background: "#fff", borderRadius: 16, border: "1px solid #E5E7EB", color: "#6B7280", fontWeight: 600 }}>
+          Loading statistics…
+        </div>
+      ) : (
+        <>
+          {/* ── KPI Cards ──────────────────────────────────────────────────── */}
+          <div className="stats-kpi-grid">
+            {kpiCards.map((card) => (
+              <div key={card.label}
+                className={`stats-kpi-card${card.onClick ? "" : " no-click"}`}
+                style={{ borderColor: card.border }}
+                onClick={card.onClick || undefined}
+                title={card.onClick ? "Click to view details" : undefined}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                  <div className="kpi-icon-wrap" style={{ background: card.bg, color: card.accent }}>{card.icon}</div>
+                  {card.onClick && <span style={{ fontSize: 11, color: "#9CA3AF", fontWeight: 600, marginTop: 4 }}>View →</span>}
+                </div>
+                <div className="kpi-count" style={{ color: card.accent }}>{card.value.toLocaleString()}</div>
+                <div className="kpi-label">{card.label}</div>
+                <div className="kpi-accent-bar" style={{ background: card.accent }} />
+              </div>
+            ))}
+          </div>
+
+          {/* ── Charts ────────────────────────────────────────────────────── */}
+          <div className="stats-charts-grid">
+            {/* Bar Chart */}
+            <div className="stats-chart-card">
+              <div className="stats-chart-title">Application Status Overview</div>
+              <div className="stats-chart-subtitle">Based on selected date range</div>
+              <ResponsiveContainer width="100%" height={260}>
+                <BarChart data={barData} margin={{ top: 20, right: 10, left: -10, bottom: 0 }} barSize={52}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" vertical={false} />
+                  <XAxis dataKey="name" tick={{ fontSize: 13, fontWeight: 600, fill: "#374151" }} axisLine={false} tickLine={false} />
+                  <YAxis allowDecimals={false} tick={{ fontSize: 12, fill: "#9CA3AF" }} axisLine={false} tickLine={false} />
+                  <Tooltip cursor={{ fill: "rgba(11,31,77,0.04)" }}
+                    contentStyle={{ borderRadius: 10, border: "1px solid #E5E7EB", fontSize: 13, fontWeight: 600 }} />
+                  <Bar dataKey="value" radius={[8,8,0,0]} label={<CustomBarLabel />}>
+                    {barData.map((entry, i) => <Cell key={`cell-${i}`} fill={entry.fill} />)}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+
+            {/* Donut Chart */}
+            <div className="stats-chart-card">
+              <div className="stats-chart-title">Application Distribution</div>
+              <div className="stats-chart-subtitle">Filtered by selected date range</div>
+              {total === 0 ? (
+                <div style={{ height: 260, display: "flex", alignItems: "center", justifyContent: "center", color: "#9CA3AF", fontWeight: 600 }}>
+                  No data for selected range
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height={260}>
+                  <PieChart>
+                    <Pie data={pieData} cx="50%" cy="50%" innerRadius={72} outerRadius={105} paddingAngle={3}
+                      dataKey="value" label={({ percent }) => `${(percent * 100).toFixed(0)}%`} labelLine={false}>
+                      {pieData.map((entry, i) => (
+                        <Cell key={`pie-${i}`} fill={PIE_COLORS[["Pending","Approved","Rejected"].indexOf(entry.name)]} />
+                      ))}
+                    </Pie>
+                    <Tooltip contentStyle={{ borderRadius: 10, border: "1px solid #E5E7EB", fontSize: 13, fontWeight: 600 }}
+                      formatter={(value, name) => [`${value} (${total ? ((value/total)*100).toFixed(1) : 0}%)`, name]} />
+                    <Legend iconType="circle" iconSize={10}
+                      formatter={(value) => <span style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>{value}</span>} />
+                    <Customized component={(props) => <DonutCenterLabel {...props} total={total} />} />
+                  </PieChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────
 const SuperAdminDashboard = () => {
   const { admin, logout } = useAuth();
   const navigate = useNavigate();
@@ -70,7 +580,7 @@ const SuperAdminDashboard = () => {
     name: "",
     District: "",
     Branch: "",
-    Contact: "",
+    mobileNumber: "",
   });
   const [showDealerPassword, setShowDealerPassword] = useState(false);
 
@@ -91,8 +601,28 @@ const SuperAdminDashboard = () => {
     name: "",
     District: "",
     Branch: "",
-    Contact: "",
+    mobileNumber: "",
   });
+
+  // Branch dropdown options
+  const branchOptions = [
+    "Gonda", "Balrampur", "Ayodhya", "Etawah", "Mainpuri", "Gopiganj",
+    "Machhali Shahar", "Gorakhpur", "Pilibhit", "Bareilly", "Kushinagar",
+    "Jaipur", "Sultanpur", "Auraiya", "Pratapgarh", "Azamgarh", "Kanpur",
+    "Agra/Mathura", "Lucknow (Hussainganj)", "Barabanki (Matiyari)", "Unnao",
+    "Deoria", "Varanasi (Tarna)", "Indore", "Aligarh", "Sitapur",
+    "Raebareilly", "Prayagraj", "Shahjahanpur", "Firozabad", "Lakhimpur",
+  ];
+
+  // Search states
+  const [filesSearch, setFilesSearch] = useState("");
+  const [filesSearchDebounced, setFilesSearchDebounced] = useState("");
+  // Debounce file search
+  useEffect(() => {
+    const t = setTimeout(() => setFilesSearchDebounced(filesSearch), 300);
+    return () => clearTimeout(t);
+  }, [filesSearch]);
+
   const [showEditDealerPassword, setShowEditDealerPassword] = useState(false);
 
   // Update edit form when editingAdmin changes
@@ -244,6 +774,20 @@ const SuperAdminDashboard = () => {
   const [adminActivity, setAdminActivity] = useState({ files: [], totalActions: 0, admin: null });
   const [loadingAdminActivity, setLoadingAdminActivity] = useState(false);
 
+  // Dealer Activity data
+  const [dealerActivity, setDealerActivity] = useState([]);
+  const [dealerActivityStats, setDealerActivityStats] = useState({ total: 0, online: 0, offline: 0 });
+  const [loadingDealerActivity, setLoadingDealerActivity] = useState(false);
+  const [dealerActivitySearch, setDealerActivitySearch] = useState("");
+  const [dealerActivitySearchDebounced, setDealerActivitySearchDebounced] = useState("");
+  const [dealerActivityFilter, setDealerActivityFilter] = useState("all"); // all, online, offline
+
+  // Debounce dealer activity search
+  useEffect(() => {
+    const t = setTimeout(() => setDealerActivitySearchDebounced(dealerActivitySearch), 300);
+    return () => clearTimeout(t);
+  }, [dealerActivitySearch]);
+
   const [busy, setBusy] = useState(false);
 
   const gridRef = useRef(null);
@@ -356,6 +900,26 @@ const SuperAdminDashboard = () => {
     }
   }, []);
 
+  // Fetch all three categories at once (for export-all / export-selected)
+  const fetchAllFilesAll = useCallback(async () => {
+    const headers = authHeaders();
+    try {
+      const [p, a, r] = await Promise.all([
+        API.get("/superadmin/files/pending",  { headers }),
+        API.get("/superadmin/files/approved", { headers }),
+        API.get("/superadmin/files/rejected", { headers }),
+      ]);
+      return {
+        pending:  Array.isArray(p.data) ? p.data : [],
+        approved: Array.isArray(a.data) ? a.data : [],
+        rejected: Array.isArray(r.data) ? r.data : [],
+      };
+    } catch (err) {
+      console.error("fetchAllFilesAll failed", err?.response?.data || err.message);
+      return { pending: [], approved: [], rejected: [] };
+    }
+  }, []);
+
   const fetchDealers = React.useCallback(async () => {
     try {
       setLoadingDealers(true);
@@ -368,6 +932,27 @@ const SuperAdminDashboard = () => {
       setDealers([]);
     } finally {
       setLoadingDealers(false);
+    }
+  }, []);
+
+  const fetchDealerActivity = React.useCallback(async (search = "", status = "all") => {
+    try {
+      setLoadingDealerActivity(true);
+      const params = new URLSearchParams();
+      if (search) params.set("search", search);
+      if (status && status !== "all") params.set("status", status);
+      const qs = params.toString();
+      const { data } = await API.get(`/superadmin/dealers/activity${qs ? `?${qs}` : ""}`, {
+        headers: authHeaders(),
+      });
+      setDealerActivity(Array.isArray(data?.dealers) ? data.dealers : []);
+      setDealerActivityStats(data?.stats || { total: 0, online: 0, offline: 0 });
+    } catch (err) {
+      console.error("Failed to load dealer activity", err?.response?.data || err.message);
+      setDealerActivity([]);
+      setDealerActivityStats({ total: 0, online: 0, offline: 0 });
+    } finally {
+      setLoadingDealerActivity(false);
     }
   }, []);
 
@@ -419,6 +1004,22 @@ const SuperAdminDashboard = () => {
     }
   }, [tab, filesTab, fetchAllFiles]);
 
+  // Auto-fetch dealer activity when switching to Dealer Activity tab
+  useEffect(() => {
+    if (tab === "dealerActivity") {
+      fetchDealerActivity(dealerActivitySearchDebounced, dealerActivityFilter);
+    }
+  }, [tab, dealerActivitySearchDebounced, dealerActivityFilter, fetchDealerActivity]);
+
+  // Auto-refresh dealer activity every 30 seconds when on that tab
+  useEffect(() => {
+    if (tab !== "dealerActivity") return;
+    const interval = setInterval(() => {
+      fetchDealerActivity(dealerActivitySearchDebounced, dealerActivityFilter);
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [tab, dealerActivitySearchDebounced, dealerActivityFilter, fetchDealerActivity]);
+
   // Auto-fetch dealers when switching to Dealers tab
   useEffect(() => {
     if (tab === "dealers") {
@@ -436,7 +1037,7 @@ const SuperAdminDashboard = () => {
         name: editingDealer.name || "",
         District: editingDealer.District || "",
         Branch: editingDealer.Branch || "",
-        Contact: editingDealer.Contact || "",
+        mobileNumber: editingDealer.mobileNumber || editingDealer.Contact || "",
       });
       setShowEditDealerPassword(false);
     } else {
@@ -447,7 +1048,7 @@ const SuperAdminDashboard = () => {
         name: "",
         District: "",
         Branch: "",
-        Contact: "",
+        mobileNumber: "",
       });
     }
   }, [editingDealer]);
@@ -642,7 +1243,7 @@ const SuperAdminDashboard = () => {
         name: "",
         District: "",
         Branch: "",
-        Contact: "",
+        mobileNumber: "",
       });
       setShowDealerPassword(false);
       await fetchDealers();
@@ -687,7 +1288,7 @@ const SuperAdminDashboard = () => {
           name: row.name || row.Name || "",
           District: row.District || row.district || "",
           Branch: row.Branch || row.branch || "",
-          Contact: row.Contact || row.contact || row.Phone || row.phone || "",
+          mobileNumber: row.mobileNumber || row.MobileNumber || row.Contact || row.contact || row.Phone || row.phone || "",
         }));
 
         setBulkDealersData(processedData);
@@ -806,7 +1407,7 @@ const SuperAdminDashboard = () => {
         name: editDealerForm.name,
         District: editDealerForm.District,
         Branch: editDealerForm.Branch,
-        Contact: editDealerForm.Contact,
+        mobileNumber: editDealerForm.mobileNumber,
       };
       
       // Only include password if it's been provided
@@ -820,7 +1421,7 @@ const SuperAdminDashboard = () => {
         { headers: authHeaders() }
       );
       setEditingDealer(null);
-      setEditDealerForm({ email: "", password: "", UserId: "", name: "", District: "", Branch: "", Contact: "" });
+      setEditDealerForm({ email: "", password: "", UserId: "", name: "", District: "", Branch: "", mobileNumber: "" });
       setShowEditDealerPassword(false);
       await fetchDealers();
       alert("Dealer updated successfully");
@@ -833,7 +1434,7 @@ const SuperAdminDashboard = () => {
 
   const cancelEditDealer = () => {
     setEditingDealer(null);
-    setEditDealerForm({ email: "", password: "", UserId: "", name: "", District: "", Branch: "", Contact: "" });
+    setEditDealerForm({ email: "", password: "", UserId: "", name: "", District: "", Branch: "", mobileNumber: "" });
     setShowEditDealerPassword(false);
   };
 
@@ -875,6 +1476,38 @@ const SuperAdminDashboard = () => {
       alert("Dealer deleted successfully");
     } catch (err) {
       alert(err?.response?.data?.message || err.message || "Failed to delete dealer");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleBulkToggleDealers = async (ids, activate) => {
+    if (!confirm(`${activate ? "Activate" : "Deactivate"} ${ids.length} dealer(s)?`)) return;
+    setBusy(true);
+    try {
+      await Promise.all(
+        ids.map(id => API.patch("/superadmin/dealers/toggle", { dealerId: id, isActive: activate }, { headers: authHeaders() }))
+      );
+      await fetchDealers();
+      alert(`${ids.length} dealer(s) ${activate ? "activated" : "deactivated"} successfully`);
+    } catch (err) {
+      alert(err?.response?.data?.message || err.message || "Bulk toggle failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleBulkDeleteDealers = async (ids) => {
+    if (!confirm(`Permanently delete ${ids.length} dealer(s)? This cannot be undone.`)) return;
+    setBusy(true);
+    try {
+      await Promise.all(
+        ids.map(id => API.delete(`/superadmin/dealers/${id}`, { headers: authHeaders() }))
+      );
+      await fetchDealers();
+      alert(`${ids.length} dealer(s) deleted successfully`);
+    } catch (err) {
+      alert(err?.response?.data?.message || err.message || "Bulk delete failed");
     } finally {
       setBusy(false);
     }
@@ -1311,6 +1944,20 @@ label > input[type="checkbox"]{
   padding: 24px;
   overflow-y: auto;
 }
+
+/* pulse animation for online dot */
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.7; transform: scale(1.2); }
+}
+
+/* table styling */
+table th {
+  position: sticky;
+  top: 0;
+  background: #fff;
+  z-index: 1;
+}
       `}</style>
 
       {/* Top bar */}
@@ -1335,6 +1982,9 @@ label > input[type="checkbox"]{
             </button>
             <button className={tab === "dealers" ? "active" : ""} onClick={() => setTab("dealers")}>
               Dealers <span className="badge b-approved">{dealers.length}</span>
+            </button>
+            <button className={tab === "dealerActivity" ? "active" : ""} onClick={() => setTab("dealerActivity")}>
+              Activity
             </button>
           </div>
 
@@ -1630,6 +2280,9 @@ label > input[type="checkbox"]{
 
       {tab === "summary" && (
         <>
+          {/* Form Tracking & Audit History */}
+          <FormTrackingAudit />
+
           {/* Filters */}
           <div className="card" style={{ marginBottom: 14 }}>
             <div style={{ fontWeight: 900, color: "#111827", marginBottom: 8 }}>
@@ -1797,96 +2450,31 @@ label > input[type="checkbox"]{
       )}
 
       {tab === "stats" && (
-        <>
-          <div className="card" style={{ marginBottom: 14 }}>
-            <div style={{ fontWeight: 900, color: "#111827", marginBottom: 16 }}>
-              Application Statistics
-            </div>
-
-            {loadingStats ? (
-              <div className="empty">Loading statistics…</div>
-            ) : (
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "16px" }}>
-                <div className="card" style={{ textAlign: "center", cursor: "pointer" }} onClick={() => { setTab("files"); setFilesTab("pending"); }}>
-                  <div style={{ fontSize: "2rem", fontWeight: "bold", color: "#f59e0b", marginBottom: 8 }}>
-                    {stats.pending || 0}
-                  </div>
-                  <div style={{ fontWeight: "600", color: "#111827" }}>Pending Applications</div>
-                  <div style={{ fontSize: "0.875rem", color: "#6b7280", marginTop: 4 }}>Click to view details</div>
-                </div>
-
-                <div className="card" style={{ textAlign: "center", cursor: "pointer" }} onClick={() => { setTab("files"); setFilesTab("approved"); }}>
-                  <div style={{ fontSize: "2rem", fontWeight: "bold", color: "#16a34a", marginBottom: 8 }}>
-                    {stats.approved || 0}
-                  </div>
-                  <div style={{ fontWeight: "600", color: "#111827" }}>Approved Applications</div>
-                  <div style={{ fontSize: "0.875rem", color: "#6b7280", marginTop: 4 }}>Click to view details</div>
-                </div>
-
-                <div className="card" style={{ textAlign: "center", cursor: "pointer" }} onClick={() => { setTab("files"); setFilesTab("rejected"); }}>
-                  <div style={{ fontSize: "2rem", fontWeight: "bold", color: "#ef4444", marginBottom: 8 }}>
-                    {stats.rejected || 0}
-                  </div>
-                  <div style={{ fontWeight: "600", color: "#111827" }}>Rejected Applications</div>
-                  <div style={{ fontSize: "0.875rem", color: "#6b7280", marginTop: 4 }}>Click to view details</div>
-                </div>
-
-                <div className="card" style={{ textAlign: "center" }}>
-                  <div style={{ fontSize: "2rem", fontWeight: "bold", color: "#2563eb", marginBottom: 8 }}>
-                    {stats.total || 0}
-                  </div>
-                  <div style={{ fontWeight: "600", color: "#111827" }}>Total Applications</div>
-                  <div style={{ fontSize: "0.875rem", color: "#6b7280", marginTop: 4 }}>All time</div>
-                </div>
-              </div>
-            )}
-          </div>
-        </>
+        <StatsDashboard
+          fetchAllFiles={fetchAllFiles}
+          setTab={setTab}
+          setFilesTab={setFilesTab}
+        />
       )}
 
       {tab === "files" && (
-        <>
-          {/* File Type Tabs */}
-          <div className="card" style={{ marginBottom: 14 }}>
-            <div style={{ display: "flex", gap: "8px", marginBottom: 16 }}>
-              <button
-                className={`btn ${filesTab === "pending" ? "btn-primary" : "btn-outline"}`}
-                onClick={() => { setFilesTab("pending"); fetchAllFiles("pending"); }}
-              >
-                Pending ({stats.pending || 0})
-              </button>
-              <button
-                className={`btn ${filesTab === "approved" ? "btn-primary" : "btn-outline"}`}
-                onClick={() => { setFilesTab("approved"); fetchAllFiles("approved"); }}
-              >
-                Approved ({stats.approved || 0})
-              </button>
-              <button
-                className={`btn ${filesTab === "rejected" ? "btn-primary" : "btn-outline"}`}
-                onClick={() => { setFilesTab("rejected"); fetchAllFiles("rejected"); }}
-              >
-                Rejected ({stats.rejected || 0})
-              </button>
-            </div>
-
-            {/* Files List */}
-            {loadingFiles ? (
-              <div className="empty">Loading files…</div>
-            ) : allFiles.length === 0 ? (
-              <div className="empty">No {filesTab} files found</div>
-            ) : (
-              <div className="grid" ref={gridRef}>
-                {allFiles.map((app) => (
-                  <SuperAdminFileCard key={app._id} app={app} type={filesTab} />
-                ))}
-              </div>
-            )}
-          </div>
-        </>
+        <FilesManagementTable
+          allFiles={allFiles}
+          loadingFiles={loadingFiles}
+          filesTab={filesTab}
+          setFilesTab={setFilesTab}
+          fetchAllFiles={fetchAllFiles}
+          stats={stats}
+          onViewDetails={(app) => navigate(`/application/${app._id}`)}
+          onRevoke={handleRevoke}
+          busy={busy}
+          fetchAllFilesAll={fetchAllFilesAll}
+        />
       )}
 
       {tab === "dealers" && (
         <>
+          {/* ── Create / Edit Dealer Forms (unchanged) ── */}
           {/* Mode Toggle */}
           <div className="card" style={{ marginBottom: 14 }}>
             <div style={{ display: "flex", gap: "8px", marginBottom: 16 }}>
@@ -1975,17 +2563,21 @@ label > input[type="checkbox"]{
                   value={dealerForm.District}
                   onChange={(e) => setDealerForm({ ...dealerForm, District: e.target.value })}
                 />
-                <input
+                <select
                   className="input"
-                  placeholder="Branch"
                   value={dealerForm.Branch}
                   onChange={(e) => setDealerForm({ ...dealerForm, Branch: e.target.value })}
-                />
+                >
+                  <option value="">Select Branch</option>
+                  {branchOptions.map((b) => (
+                    <option key={b} value={b}>{b}</option>
+                  ))}
+                </select>
                 <input
                   className="input"
-                  placeholder="Contact"
-                  value={dealerForm.Contact}
-                  onChange={(e) => setDealerForm({ ...dealerForm, Contact: e.target.value })}
+                  placeholder="Dealer Mobile Number"
+                  value={dealerForm.mobileNumber}
+                  onChange={(e) => setDealerForm({ ...dealerForm, mobileNumber: e.target.value })}
                 />
                 <div className="actions">
                   <button className="btn btn-primary" disabled={busy}>
@@ -2224,17 +2816,21 @@ label > input[type="checkbox"]{
                   value={editDealerForm.District || ""}
                   onChange={(e) => setEditDealerForm({ ...editDealerForm, District: e.target.value })}
                 />
-                <input
+                <select
                   className="input"
-                  placeholder="Branch"
                   value={editDealerForm.Branch || ""}
                   onChange={(e) => setEditDealerForm({ ...editDealerForm, Branch: e.target.value })}
-                />
+                >
+                  <option value="">Select Branch</option>
+                  {branchOptions.map((b) => (
+                    <option key={b} value={b}>{b}</option>
+                  ))}
+                </select>
                 <input
                   className="input"
-                  placeholder="Contact"
-                  value={editDealerForm.Contact || ""}
-                  onChange={(e) => setEditDealerForm({ ...editDealerForm, Contact: e.target.value })}
+                  placeholder="Dealer Mobile Number"
+                  value={editDealerForm.mobileNumber || ""}
+                  onChange={(e) => setEditDealerForm({ ...editDealerForm, mobileNumber: e.target.value })}
                 />
                 <div className="actions">
                   <button className="btn btn-primary" disabled={busy}>
@@ -2254,70 +2850,212 @@ label > input[type="checkbox"]{
             </div>
           )}
 
-          {/* Dealers List */}
-          {loadingDealers ? (
-            <div className="empty">Loading dealers…</div>
-          ) : dealers.length === 0 ? (
+          {/* ── Data Table ── */}
+          <DealerManagementTable
+            dealers={dealers}
+            loading={loadingDealers}
+            busy={busy}
+            branchOptions={branchOptions}
+            onEdit={handleEditDealer}
+            onToggle={toggleDealerActive}
+            onDelete={handleDeleteDealer}
+            onBulkToggle={handleBulkToggleDealers}
+            onBulkDelete={handleBulkDeleteDealers}
+          />
+        </>
+      )}
+
+      {tab === "dealerActivity" && (
+        <>
+          {/* Activity Stats Cards */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "16px", marginBottom: 18 }}>
+            <div
+              className="card"
+              style={{ textAlign: "center", cursor: "pointer", border: dealerActivityFilter === "all" ? "2px solid #2563eb" : undefined }}
+              onClick={() => setDealerActivityFilter("all")}
+            >
+              <div style={{ fontSize: "2rem", fontWeight: "bold", color: "#2563eb", marginBottom: 4 }}>
+                {dealerActivityStats.total}
+              </div>
+              <div style={{ fontWeight: "600", color: "#111827" }}>Total Dealers</div>
+            </div>
+            <div
+              className="card"
+              style={{ textAlign: "center", cursor: "pointer", border: dealerActivityFilter === "online" ? "2px solid #16a34a" : undefined }}
+              onClick={() => setDealerActivityFilter("online")}
+            >
+              <div style={{ fontSize: "2rem", fontWeight: "bold", color: "#16a34a", marginBottom: 4 }}>
+                {dealerActivityStats.online}
+              </div>
+              <div style={{ fontWeight: "600", color: "#111827" }}>Online Now</div>
+            </div>
+            <div
+              className="card"
+              style={{ textAlign: "center", cursor: "pointer", border: dealerActivityFilter === "offline" ? "2px solid #6b7280" : undefined }}
+              onClick={() => setDealerActivityFilter("offline")}
+            >
+              <div style={{ fontSize: "2rem", fontWeight: "bold", color: "#6b7280", marginBottom: 4 }}>
+                {dealerActivityStats.offline}
+              </div>
+              <div style={{ fontWeight: "600", color: "#111827" }}>Offline</div>
+            </div>
+          </div>
+
+          {/* Search Bar */}
+          <div className="card" style={{ marginBottom: 14 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
+              <div style={{ fontWeight: 900, color: "#111827", flex: 1 }}>Dealer Login Activity</div>
+              <button
+                className="btn btn-outline"
+                onClick={() => fetchDealerActivity(dealerActivitySearchDebounced, dealerActivityFilter)}
+                disabled={loadingDealerActivity}
+                style={{ fontSize: 13 }}
+              >
+                {loadingDealerActivity ? "Refreshing…" : "↻ Refresh"}
+              </button>
+            </div>
+            <input
+              className="input"
+              type="text"
+              placeholder="🔍 Search by Name, Email, User ID, Mobile, or Branch..."
+              value={dealerActivitySearch}
+              onChange={(e) => setDealerActivitySearch(e.target.value)}
+              style={{ width: "100%", padding: "12px 16px", borderRadius: 12, fontSize: 14, fontWeight: 500 }}
+            />
+            <div className="meta" style={{ marginTop: 8, fontSize: 11 }}>
+              Auto-refreshes every 30 seconds • Online = active in last 5 minutes
+            </div>
+          </div>
+
+          {/* Activity Table */}
+          {loadingDealerActivity ? (
+            <div className="empty">Loading dealer activity…</div>
+          ) : dealerActivity.length === 0 ? (
             <div className="empty">No dealers found</div>
           ) : (
-            <div className="grid" ref={gridRef}>
-              {dealers.map((dealer) => (
-                <div key={dealer._id} className="card">
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <div style={{ fontWeight: 900, color: "#111827" }}>
-                      {dealer.name || "—"}
-                    </div>
-                    <span className={`tag ${dealer.isActive !== false ? "tag-approved" : "tag-rejected"}`}>
-                      {dealer.isActive !== false ? "Active" : "Inactive"}
-                    </span>
-                  </div>
-                  <div className="meta">Email: <b style={{ color: "#111" }}>{dealer.email || "—"}</b></div>
-                  {dealer.UserId && (
-                    <div className="meta">User ID: <b style={{ color: "#111" }}>{dealer.UserId}</b></div>
-                  )}
-                  <div className="row2">
-                    {dealer.District && (
-                      <div><span className="k">District</span><div className="v">{dealer.District}</div></div>
-                    )}
-                    {dealer.Branch && (
-                      <div><span className="k">Branch</span><div className="v">{dealer.Branch}</div></div>
-                    )}
-                    {dealer.Contact && (
-                      <div><span className="k">Contact</span><div className="v">{dealer.Contact}</div></div>
-                    )}
-                  </div>
-                  <div className="meta" style={{ marginTop: 4 }}>
-                    Created: <b style={{ color: "#111" }}>
-                      {dealer.createdAt ? new Date(dealer.createdAt).toLocaleString() : "—"}
-                    </b>
-                  </div>
-                  <div className="actions">
-                    <button
-                      className="btn btn-primary"
-                      onClick={() => toggleDealerActive(dealer._id, dealer.isActive !== false)}
-                      disabled={busy}
-                    >
-                      {dealer.isActive !== false ? "Deactivate" : "Activate"}
-                    </button>
-                    <button
-                      className="btn btn-outline"
-                      onClick={() => handleEditDealer(dealer)}
-                      disabled={busy}
-                      style={{ marginLeft: 8 }}
-                    >
-                      Edit
-                    </button>
-                    <button
-                      className="btn"
-                      onClick={() => handleDeleteDealer(dealer._id)}
-                      disabled={busy}
-                      style={{ marginLeft: 8, backgroundColor: "#ef4444", color: "white", borderColor: "#ef4444" }}
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </div>
-              ))}
+            <div className="card" style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+                <thead>
+                  <tr style={{ borderBottom: "2px solid rgba(14,20,36,0.08)" }}>
+                    <th style={{ padding: "12px 14px", textAlign: "left", fontWeight: 800, color: "#111827", fontSize: 12, textTransform: "uppercase", letterSpacing: "0.5px" }}>Status</th>
+                    <th style={{ padding: "12px 14px", textAlign: "left", fontWeight: 800, color: "#111827", fontSize: 12, textTransform: "uppercase", letterSpacing: "0.5px" }}>Dealer</th>
+                    <th style={{ padding: "12px 14px", textAlign: "left", fontWeight: 800, color: "#111827", fontSize: 12, textTransform: "uppercase", letterSpacing: "0.5px" }}>User ID</th>
+                    <th style={{ padding: "12px 14px", textAlign: "left", fontWeight: 800, color: "#111827", fontSize: 12, textTransform: "uppercase", letterSpacing: "0.5px" }}>Branch</th>
+                    <th style={{ padding: "12px 14px", textAlign: "left", fontWeight: 800, color: "#111827", fontSize: 12, textTransform: "uppercase", letterSpacing: "0.5px" }}>Mobile</th>
+                    <th style={{ padding: "12px 14px", textAlign: "left", fontWeight: 800, color: "#111827", fontSize: 12, textTransform: "uppercase", letterSpacing: "0.5px" }}>Last Login</th>
+                    <th style={{ padding: "12px 14px", textAlign: "left", fontWeight: 800, color: "#111827", fontSize: 12, textTransform: "uppercase", letterSpacing: "0.5px" }}>Last Active</th>
+                    <th style={{ padding: "12px 14px", textAlign: "left", fontWeight: 800, color: "#111827", fontSize: 12, textTransform: "uppercase", letterSpacing: "0.5px" }}>Account</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {dealerActivity.map((dealer) => {
+                    const timeAgo = (date) => {
+                      if (!date) return "Never";
+                      const diff = Date.now() - new Date(date).getTime();
+                      const mins = Math.floor(diff / 60000);
+                      if (mins < 1) return "Just now";
+                      if (mins < 60) return `${mins}m ago`;
+                      const hrs = Math.floor(mins / 60);
+                      if (hrs < 24) return `${hrs}h ago`;
+                      const days = Math.floor(hrs / 24);
+                      if (days < 7) return `${days}d ago`;
+                      return new Date(date).toLocaleDateString();
+                    };
+
+                    return (
+                      <tr
+                        key={dealer._id}
+                        style={{
+                          borderBottom: "1px solid rgba(14,20,36,0.04)",
+                          transition: "background var(--transition)",
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(241,245,249,0.5)")}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                      >
+                        {/* Status dot */}
+                        <td style={{ padding: "12px 14px" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <div
+                              style={{
+                                width: 10,
+                                height: 10,
+                                borderRadius: "50%",
+                                background: dealer.isOnline ? "#16a34a" : "#d1d5db",
+                                boxShadow: dealer.isOnline ? "0 0 8px rgba(22,163,74,0.5)" : "none",
+                                animation: dealer.isOnline ? "pulse 2s ease-in-out infinite" : "none",
+                              }}
+                            />
+                            <span style={{
+                              fontSize: 12,
+                              fontWeight: 700,
+                              color: dealer.isOnline ? "#16a34a" : "#9ca3af",
+                            }}>
+                              {dealer.isOnline ? "Online" : "Offline"}
+                            </span>
+                          </div>
+                        </td>
+
+                        {/* Dealer Info */}
+                        <td style={{ padding: "12px 14px" }}>
+                          <div style={{ fontWeight: 700, color: "#111827" }}>{dealer.name || "—"}</div>
+                          <div style={{ fontSize: 12, color: "#6b7280" }}>{dealer.email}</div>
+                        </td>
+
+                        {/* User ID */}
+                        <td style={{ padding: "12px 14px" }}>
+                          <span style={{ fontWeight: 700, color: "#2563eb", fontSize: 12 }}>
+                            {dealer.UserId || "—"}
+                          </span>
+                        </td>
+
+                        {/* Branch */}
+                        <td style={{ padding: "12px 14px" }}>
+                          <div style={{ fontWeight: 600 }}>{dealer.Branch || "—"}</div>
+                          {dealer.District && (
+                            <div style={{ fontSize: 11, color: "#6b7280" }}>{dealer.District}</div>
+                          )}
+                        </td>
+
+                        {/* Mobile */}
+                        <td style={{ padding: "12px 14px", fontSize: 13 }}>
+                          {dealer.mobileNumber || "—"}
+                        </td>
+
+                        {/* Last Login */}
+                        <td style={{ padding: "12px 14px" }}>
+                          <div style={{ fontWeight: 600, fontSize: 13 }}>
+                            {dealer.lastLoginAt ? timeAgo(dealer.lastLoginAt) : "Never"}
+                          </div>
+                          {dealer.lastLoginAt && (
+                            <div style={{ fontSize: 11, color: "#6b7280" }}>
+                              {new Date(dealer.lastLoginAt).toLocaleString()}
+                            </div>
+                          )}
+                        </td>
+
+                        {/* Last Active */}
+                        <td style={{ padding: "12px 14px" }}>
+                          <div style={{ fontWeight: 600, fontSize: 13 }}>
+                            {dealer.lastActive ? timeAgo(dealer.lastActive) : "Never"}
+                          </div>
+                          {dealer.lastActive && (
+                            <div style={{ fontSize: 11, color: "#6b7280" }}>
+                              {new Date(dealer.lastActive).toLocaleString()}
+                            </div>
+                          )}
+                        </td>
+
+                        {/* Account Status */}
+                        <td style={{ padding: "12px 14px" }}>
+                          <span className={`tag ${dealer.isActive !== false ? "tag-approved" : "tag-rejected"}`}>
+                            {dealer.isActive !== false ? "Active" : "Inactive"}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           )}
         </>

@@ -15,6 +15,7 @@ import {
 } from '../controllers/workflowController.js';
 import protect from '../middleware/authMiddleware.js';
 import Application from "../models/Application.js";
+import { autoMergeApplications } from '../services/autoMergeService.js';
 
 const router = express.Router();
 
@@ -42,6 +43,14 @@ router.get('/applications/rejected/:id', protect, getRejectedApplicationById);
 
 // maintenance
 router.post('/fix-dealers', protect, fixDealerForApplications);
+
+// manual merge trigger (non-blocking, runs in background)
+router.post('/merge', protect, (req, res) => {
+  res.json({ message: 'Auto-merge triggered in background' });
+  autoMergeApplications()
+    .then(() => console.log('[autoMerge] Manual trigger complete'))
+    .catch((err) => console.error('[autoMerge] Manual trigger failed:', err.message));
+});
 
 // debug helper
 router.get('/debug/pending-stages', protect, async (req, res) => {

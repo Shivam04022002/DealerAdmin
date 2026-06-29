@@ -2,6 +2,8 @@
 import React, { useEffect, useState, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import api from "../services/api";
+import FilePreview from "../components/FilePreview";
+import DashboardLayout from "../components/layout/DashboardLayout";
 
 
 export default function ApprovedApplicationView() {
@@ -42,17 +44,21 @@ export default function ApprovedApplicationView() {
 
   if (loading) {
     return (
-      <div style={styles.pageWrapLoading}>
-        <div style={styles.loader}>Loading…</div>
-      </div>
+      <DashboardLayout>
+        <div style={styles.pageWrapLoading}>
+          <div style={styles.loader}>Loading…</div>
+        </div>
+      </DashboardLayout>
     );
   }
 
   if (!app) {
     return (
-      <div style={styles.pageWrapLoading}>
-        <div style={styles.loader}>No data found</div>
-      </div>
+      <DashboardLayout>
+        <div style={styles.pageWrapLoading}>
+          <div style={styles.loader}>No data found</div>
+        </div>
+      </DashboardLayout>
     );
   }
   
@@ -68,7 +74,8 @@ export default function ApprovedApplicationView() {
 
   /* ---------- UI ---------- */
   return (
-    <div style={styles.shell}>
+    <DashboardLayout>
+      <div style={{ display: "flex", gap: 18, width: "100%", height: "100%" }}>
       {/* LEFT: compact sticky summary */}
       <aside style={styles.sidebar}>
         <button onClick={goBack} style={styles.backBtn}>
@@ -112,7 +119,10 @@ export default function ApprovedApplicationView() {
           </Grid>
           <Grid two>
             <Field label="Name" value={applicant?.name} />
-            <Field label="Father’s Name" value={applicant?.fatherName} />
+            <Field label="Mobile Number" value={applicant?.mobileNumber || applicant?.mobile} />
+            <Field label="Email" value={applicant?.email} />
+            <Field label="Gender" value={applicant?.gender} />
+            <Field label="Father's Name" value={applicant?.fatherName} />
             <Field label="DOB" value={applicant?.dateOfBirth?.substring(0, 10)} />
             <Field label="Aadhaar No" value={applicant?.aadharNo} />
             <Field label="PAN No" value={applicant?.panNo} />
@@ -128,7 +138,10 @@ export default function ApprovedApplicationView() {
           </Grid>
           <Grid two>
             <Field label="Name" value={app?.coApplicant?.name} />
-            <Field label="Father’s Name" value={app?.coApplicant?.fatherName} />
+            <Field label="Mobile Number" value={app?.coApplicant?.mobileNumber || app?.coApplicant?.mobile} />
+            <Field label="Email" value={app?.coApplicant?.email} />
+            <Field label="Gender" value={app?.coApplicant?.gender} />
+            <Field label="Father's Name" value={app?.coApplicant?.fatherName} />
             <Field label="DOB" value={app?.coApplicant?.dateOfBirth?.substring(0, 10)} />
             <Field label="Aadhaar No" value={app?.coApplicant?.aadharNo} />
             <Field label="PAN No" value={app?.coApplicant?.panNo} />
@@ -147,6 +160,11 @@ export default function ApprovedApplicationView() {
             <Field label="Model" value={app?.vehicleDetails?.modelName} />
             <Field label="Price of Vehicle" value={app?.vehicleDetails?.priceOfVehicle} />
           </Grid>
+          {app?.vehicleDetails?.vehicleImage && (
+            <Grid three style={{ marginTop: 10 }}>
+              <ImageField label="Vehicle Image" src={app?.vehicleDetails?.vehicleImage} />
+            </Grid>
+          )}
         </Section>
 
         <Section title="Finance Details" refProp={financeRef}>
@@ -181,7 +199,8 @@ export default function ApprovedApplicationView() {
           </Grid>
         </Section>
       </main>
-    </div>
+      </div>
+    </DashboardLayout>
   );
 }
 
@@ -229,7 +248,7 @@ function ImageField({ label, src }) {
       <div style={styles.fieldLabel}>{label}</div>
       <div style={styles.imageBox}>
         {src ? (
-          <img src={src} alt={label} style={styles.image} />
+          <FilePreview src={src} alt={label} style={styles.image} />
         ) : (
           <div style={styles.imagePlaceholder}>No Image</div>
         )}
@@ -241,15 +260,6 @@ function ImageField({ label, src }) {
 /* ====================== Styles ====================== */
 
 const styles = {
-  shell: {
-    display: "grid",
-    gridTemplateColumns: "280px 1fr",
-    gap: 18,
-    height: "100vh",
-    padding: 18,
-    background:
-      "radial-gradient(1200px 600px at -200px -150px, #ecfdf5 40%, transparent 41%), linear-gradient(135deg, #f0fdf4, #ffffff)",
-  },
   sidebar: {
     position: "sticky",
     top: 18,

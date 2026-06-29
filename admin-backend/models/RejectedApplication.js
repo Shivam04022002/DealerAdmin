@@ -40,4 +40,11 @@ const RejectedSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+RejectedSchema.index({ formId: 1 });
+RejectedSchema.index({ status: 1 });
+RejectedSchema.index({ createdAt: -1 });
+RejectedSchema.index({ "dealerDetails.branch": 1 });
+RejectedSchema.index({ "dealerDetails.district": 1 });
+RejectedSchema.index({ dealer: 1 });
+
 export default mongoose.model("RejectedApplication", RejectedSchema, "rejectedApplications");

@@ -20,6 +20,7 @@ import {
   updateDealer,
   toggleDealerActive,
   deleteDealer,
+  getDealerLoginActivity,
 } from "../controllers/superadminController.js";
 
 const router = express.Router();
@@ -44,6 +45,7 @@ router.post("/applications/revoke", revokeRejectedApplication);
 // Dealer management routes
 router.post("/dealers", createDealer);
 router.post("/dealers/bulk", bulkCreateDealers);
+router.get("/dealers/activity", getDealerLoginActivity); // Must come before /dealers/:id
 router.get("/dealers", listDealers);
 router.patch("/dealers/toggle", toggleDealerActive); // Must come before /dealers/:id
 router.patch("/dealers/:id", updateDealer);
