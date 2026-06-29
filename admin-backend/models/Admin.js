@@ -52,9 +52,6 @@ const adminSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Helpful unique index (Mongo will already enforce via 'unique: true', but index is explicit)
-adminSchema.index({ email: 1 }, { unique: true });
-
 // 🔐 Pre-save hook to hash password
 adminSchema.pre("save", async function (next) {
   try {

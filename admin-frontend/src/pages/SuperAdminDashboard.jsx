@@ -6,6 +6,7 @@ import { useNavigate } from "react-router-dom";
 import logo from "../assets/logo-surjit.png";
 import * as XLSX from 'xlsx';
 import FilesManagementTable from "../components/FilesManagementTable";
+import { WORKFLOW_STAGES, stageLabel, toStage } from "../utils/workflowConfig";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, Legend, Customized,
@@ -527,23 +528,7 @@ const SuperAdminDashboard = () => {
   const [admins, setAdmins] = useState([]);
   const [loadingAdmins, setLoadingAdmins] = useState(false);
 
-  // Available workflow stages (actual processing stages, not application statuses)
-  // Note: Also accept "disbursed" as alias for "disbursement"
-  const availableWorkflows = [
-    "contact creation",
-    "cibil",
-    "housevisit",
-    "document collection",
-    "credit sanction",
-    "agreement",
-    "pre-disbursement documentation",
-    "disbursement"
-  ];
-
-  // Map aliases to canonical names (e.g., "disbursed" -> "disbursement")
-  const workflowAliases = {
-    "disbursed": "disbursement"
-  };
+  const availableWorkflows = WORKFLOW_STAGES;
 
   // Create admin form
   const [form, setForm] = useState({
@@ -551,7 +536,7 @@ const SuperAdminDashboard = () => {
     email: "",
     password: "",
     role: "admin",
-    selectedWorkflows: ["contact creation", "cibil", "housevisit", "document collection", "credit sanction", "agreement", "pre-disbursement documentation", "disbursement"], // All workflow stages by default
+    selectedWorkflows: [...WORKFLOW_STAGES],
   });
 
   // Edit admin state
@@ -635,100 +620,22 @@ const SuperAdminDashboard = () => {
       // console.log("Admin workflows isArray:", Array.isArray(editingAdmin.workflows));
       // console.log("Admin workflows JSON:", JSON.stringify(editingAdmin.workflows));
 
-      // Normalize workflows: handle nested arrays and ensure all are strings
-      let workflows = [];
-      const normalizedAvailable = availableWorkflows.map(w => w.trim().toLowerCase());
-      
-      // Helper to normalize a workflow value
-      const normalizeWorkflowValue = (value) => {
-        if (typeof value === 'string') {
-          // Remove quotes if present
-          let cleaned = value.trim().replace(/^["']|["']$/g, '');
-          cleaned = cleaned.trim().toLowerCase();
-          
-          // Map aliases to canonical names
-          if (workflowAliases[cleaned]) {
-            cleaned = workflowAliases[cleaned];
-          }
-          
-          return cleaned;
+      // Normalise workflows using the shared toStage helper (handles all legacy aliases)
+      const raw = editingAdmin.workflows;
+      let workflowArray = [];
+      if (Array.isArray(raw)) {
+        workflowArray = raw.flat();
+      } else if (typeof raw === 'string') {
+        try { workflowArray = JSON.parse(raw); } catch {
+          workflowArray = raw.replace(/[\[\]"']/g, '').split(/[,\n]+/);
         }
-        return (value?.toString() || '').trim().toLowerCase();
-      };
-      
-      if (Array.isArray(editingAdmin.workflows)) {
-        // Flatten nested arrays and normalize strings
-        const flattened = editingAdmin.workflows.flat(); // Flatten nested arrays like [["contact creation", ...]]
-        // console.log("useEffect: flattened workflows:", flattened);
-        
-        workflows = flattened
-          .map(w => {
-            let normalized = normalizeWorkflowValue(w);
-            // Map to canonical name (e.g., "disbursed" -> "disbursement")
-            if (workflowAliases[normalized]) {
-              console.log(`  Mapping alias: "${normalized}" -> "${workflowAliases[normalized]}"`);
-              normalized = workflowAliases[normalized];
-            }
-            // console.log(`  Processing: "${w}" -> "${normalized}"`);
-            return normalized;
-          })
-          .filter(w => {
-            const isValid = w && normalizedAvailable.includes(w);
-            if (!isValid && w) {
-              console.log(`  ⚠️ Filtered out: "${w}" (not in available workflows)`);
-              console.log(`  Available workflows:`, normalizedAvailable);
-            }
-            return isValid;
-          });
-      } else if (typeof editingAdmin.workflows === 'string') {
-        console.log("Workflows is a string, attempting to parse...");
-        // Try to parse as JSON first, then fall back to comma-separated
-        let workflowArray = [];
-        try {
-          const parsed = JSON.parse(editingAdmin.workflows);
-          console.log("  Parsed as JSON:", parsed);
-          workflowArray = Array.isArray(parsed) ? parsed : [parsed];
-        } catch (e) {
-          console.log("  Not valid JSON, treating as comma-separated string");
-          // Remove surrounding brackets/quotes if present
-          let cleaned = editingAdmin.workflows.trim();
-          cleaned = cleaned.replace(/^\[|\]$/g, ''); // Remove array brackets
-          cleaned = cleaned.replace(/^"|"$/g, ''); // Remove surrounding quotes
-          workflowArray = cleaned.split(/[,\n]+/).filter(w => w.trim());
-        }
-        
-        console.log("  workflowArray:", workflowArray);
-        
-        workflows = workflowArray
-          .map(w => {
-            let normalized = normalizeWorkflowValue(w);
-            // Map to canonical name
-            if (workflowAliases[normalized]) {
-              normalized = workflowAliases[normalized];
-            }
-            return normalized;
-          })
-          .filter(w => {
-            const isValid = w && normalizedAvailable.includes(w);
-            if (!isValid && w) {
-              console.log(`  ⚠️ Filtered out: "${w}" (not in available workflows)`);
-            }
-            return isValid;
-          });
-      } else if (editingAdmin.workflows) {
-        console.log("Workflows is other type, attempting to convert...");
-        workflows = [editingAdmin.workflows]
-          .flat()
-          .map(w => normalizeWorkflowValue(w))
-          .filter(w => w && normalizedAvailable.includes(w));
+        if (!Array.isArray(workflowArray)) workflowArray = [workflowArray];
+      } else if (raw) {
+        workflowArray = [raw].flat();
       }
-      
-      // console.log("Final processed workflows:", workflows);
-      // console.log("Normalized available workflows:", normalizedAvailable);
-      // console.log("=====================================");
-
-      // console.log("useEffect: processed workflows (normalized):", workflows);
-      // console.log("useEffect: availableWorkflows:", availableWorkflows);
+      const workflows = [...new Set(
+        workflowArray.map(w => toStage(w)).filter(w => WORKFLOW_STAGES.includes(w))
+      )];
 
       setEditForm({
         name: editingAdmin.name || "",
@@ -1517,63 +1424,17 @@ const SuperAdminDashboard = () => {
   const handleWorkflowChange = (workflow, isChecked, isEdit = false) => {
     const targetForm = isEdit ? editForm : form;
     const setTargetForm = isEdit ? setEditForm : setForm;
-
-    let normalizedWorkflow = workflow.trim().toLowerCase();
-    // Map to canonical name
-    if (workflowAliases[normalizedWorkflow]) {
-      normalizedWorkflow = workflowAliases[normalizedWorkflow];
-    }
-
+    const normalizedWorkflow = toStage(workflow);
     const updatedWorkflows = isChecked
-      ? [...targetForm.selectedWorkflows, normalizedWorkflow]
-      : targetForm.selectedWorkflows.filter(w => {
-          let normalizedW = typeof w === 'string' ? w.trim().toLowerCase() : String(w || '').trim().toLowerCase();
-          // Map to canonical name for comparison
-          if (workflowAliases[normalizedW]) {
-            normalizedW = workflowAliases[normalizedW];
-          }
-          return normalizedW !== normalizedWorkflow;
-        });
-
-    console.log(`handleWorkflowChange: ${workflow} ${isChecked ? 'checked' : 'unchecked'}`);
-    console.log("  normalizedWorkflow:", normalizedWorkflow);
-    console.log("  updatedWorkflows:", updatedWorkflows);
-
-    setTargetForm({
-      ...targetForm,
-      selectedWorkflows: updatedWorkflows
-    });
+      ? [...new Set([...targetForm.selectedWorkflows, normalizedWorkflow])]
+      : targetForm.selectedWorkflows.filter(w => toStage(w) !== normalizedWorkflow);
+    setTargetForm({ ...targetForm, selectedWorkflows: updatedWorkflows });
   };
 
   const isWorkflowSelected = (workflow, isEdit = false) => {
     const targetForm = isEdit ? editForm : form;
-    let normalizedWorkflow = workflow.trim().toLowerCase();
-    
-    // Map aliases to canonical names
-    if (workflowAliases[normalizedWorkflow]) {
-      normalizedWorkflow = workflowAliases[normalizedWorkflow];
-    }
-    
-    // Normalize all selected workflows for comparison
-    const normalizedSelected = (targetForm.selectedWorkflows || []).map(w => {
-      const val = typeof w === 'string' ? w : (w?.toString() || '');
-      let normalized = val.trim().toLowerCase();
-      // Apply alias mapping
-      if (workflowAliases[normalized]) {
-        normalized = workflowAliases[normalized];
-      }
-      return normalized;
-    });
-    
-    const selected = normalizedSelected.includes(normalizedWorkflow);
-
-    if (isEdit && selected) {
-      // console.log(`✅ isWorkflowSelected("${workflow}", edit=true):`, selected);
-      // console.log("  normalizedWorkflow:", normalizedWorkflow);
-      // console.log("  normalizedSelected:", normalizedSelected);
-    }
-
-    return selected;
+    const key = toStage(workflow);
+    return (targetForm.selectedWorkflows || []).map(toStage).includes(key);
   };
 
   // ===== UI pieces (cards, same style system) =====
@@ -2129,7 +1990,7 @@ table th {
                         checked={isWorkflowSelected(workflow)}
                         onChange={(e) => handleWorkflowChange(workflow, e.target.checked)}
                       />
-                      <span style={{ fontSize: "14px" }}>{workflow}</span>
+                      <span style={{ fontSize: "14px" }}>{stageLabel(workflow)}</span>
                     </label>
                   ))}
                 </div>
@@ -2235,7 +2096,7 @@ table th {
                             fontWeight: isChecked ? "bold" : "normal",
                             color: isChecked ? "#16a34a" : "#6b7280"
                           }}>
-                            {workflow}
+                            {stageLabel(workflow)}
                           </span>
                         </label>
                       );

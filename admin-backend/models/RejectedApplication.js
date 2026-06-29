@@ -46,5 +46,7 @@ RejectedSchema.index({ createdAt: -1 });
 RejectedSchema.index({ "dealerDetails.branch": 1 });
 RejectedSchema.index({ "dealerDetails.district": 1 });
 RejectedSchema.index({ dealer: 1 });
+RejectedSchema.index({ "dealerDetails.branch": 1, createdAt: -1 });
+RejectedSchema.index({ "dealerDetails.name": 1 });
 
 export default mongoose.model("RejectedApplication", RejectedSchema, "rejectedApplications");

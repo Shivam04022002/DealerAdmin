@@ -4,6 +4,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import api from "../services/api";
 import FilePreview from "../components/FilePreview";
 import DashboardLayout from "../components/layout/DashboardLayout";
+import { stageLabel } from "../utils/workflowConfig";
 
 
 export default function ApprovedApplicationView() {
@@ -194,7 +195,7 @@ export default function ApprovedApplicationView() {
 
         <Section title="Workflow" refProp={workflowRef}>
           <Grid two>
-            <Field label="Final Stage" value={app?.workflowStage || "disbursement"} />
+            <Field label="Final Stage" value={stageLabel(app?.workflowStage) || "Disbursed"} />
             <Field label="Approved At" value={approvedAt} />
           </Grid>
         </Section>

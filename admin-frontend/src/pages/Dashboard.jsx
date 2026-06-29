@@ -3,6 +3,7 @@ import React, { useEffect, useState, useRef, useMemo, useCallback } from "react"
 import API from "../services/api";
 import { useAuth } from "../context/AuthContext";
 import { useNavigate, useLocation } from "react-router-dom";
+import { WORKFLOW_STAGES, stageLabel, stageColor, toStage } from "../utils/workflowConfig";
 import logo from "../assets/logo-surjit.png";
 import {
   useReactTable,
@@ -46,26 +47,14 @@ function StatusBadge({ status }) {
 }
 
 /* ─── Stage Badge ───────────────────────────────────────── */
-const STAGE_COLORS = {
-  "housevisit":                    { bg: "#EFF6FF", color: "#1D4ED8", border: "#BFDBFE" },
-  "contact creation":              { bg: "#F5F3FF", color: "#6D28D9", border: "#DDD6FE" },
-  "cibil":                         { bg: "#FFF7ED", color: "#C2410C", border: "#FDBA74" },
-  "document collection":           { bg: "#ECFDF5", color: "#065F46", border: "#6EE7B7" },
-  "credit sanction":               { bg: "#FEF9C3", color: "#92400E", border: "#FDE68A" },
-  "agreement":                     { bg: "#FDF2F8", color: "#86198F", border: "#F0ABFC" },
-  "pre-disbursement documentation":{ bg: "#F0FDF4", color: "#14532D", border: "#86EFAC" },
-  "disbursement":                  { bg: "#DCFCE7", color: "#14532D", border: "#4ADE80" },
-  "disbursed":                     { bg: "#D1FAE5", color: "#065F46", border: "#34D399" },
-};
 function StageBadge({ stage }) {
-  const key = String(stage || "").toLowerCase();
-  const c = STAGE_COLORS[key] || { bg: "#F1F5F9", color: "#475569", border: "#CBD5E1" };
+  const c = stageColor(stage);
   return (
     <span style={{
       display: "inline-block", padding: "2px 9px", borderRadius: 6,
       fontSize: 11, fontWeight: 700, background: c.bg, color: c.color,
       border: `1px solid ${c.border}`, textTransform: "capitalize", whiteSpace: "nowrap",
-    }}>{stage || "—"}</span>
+    }}>{stageLabel(stage) || "—"}</span>
   );
 }
 
@@ -232,6 +221,17 @@ const Dashboard = () => {
   const [pendingApps, setPendingApps]   = useState([]);
   const [approvedApps, setApprovedApps] = useState([]);
   const [rejectedApps, setRejectedApps] = useState([]);
+  const [pendingTotal,  setPendingTotal]  = useState(0);
+  const [approvedTotal, setApprovedTotal] = useState(0);
+  const [rejectedTotal, setRejectedTotal] = useState(0);
+  const [pendingPages,  setPendingPages]  = useState(1);
+  const [approvedPages, setApprovedPages] = useState(1);
+  const [rejectedPages, setRejectedPages] = useState(1);
+  // per-tab server page
+  const [pendingPage,   setPendingPage]   = useState(1);
+  const [approvedPage,  setApprovedPage]  = useState(1);
+  const [rejectedPage,  setRejectedPage]  = useState(1);
+  const [pageLimit, setPageLimit] = useState(50);
   const [tab, setTab] = useState("pending");
   /* per-tab loading flags so the spinner only shows for the active tab */
   const [loadingPending,  setLoadingPending]  = useState(false);
@@ -274,29 +274,73 @@ const Dashboard = () => {
   /* reset selection on tab change */
   useEffect(() => { setRowSelection({}); }, [tab]);
 
+  /* helpers: current tab page state */
+  const currentPage  = tab === "pending" ? pendingPage  : tab === "approved" ? approvedPage  : rejectedPage;
+  const currentPages = tab === "pending" ? pendingPages : tab === "approved" ? approvedPages : rejectedPages;
+  const currentTotal = tab === "pending" ? pendingTotal : tab === "approved" ? approvedTotal : rejectedTotal;
+  const setCurrentPage = tab === "pending" ? setPendingPage : tab === "approved" ? setApprovedPage : setRejectedPage;
+
+  const goToPage = (p) => {
+    const clamped = Math.max(1, Math.min(p, currentPages));
+    setCurrentPage(clamped);
+  };
+
   /* ── Auth headers ── */
   const authHeaders = useCallback(() => {
     const token = localStorage.getItem("adminToken");
     return token ? { Authorization: `Bearer ${token}` } : {};
   }, []);
 
-  /* ── Fetch all three in parallel on mount ── */
-  const fetchAll = useCallback(async () => {
+  /* ── Fetch a single tab (or all three on first load) ── */
+  const fetchTab = useCallback(async (which, page, limit) => {
     if (!admin) return;
     const headers = authHeaders();
+    const params  = { page, limit };
+
+    const setLoading = which === "pending" ? setLoadingPending : which === "approved" ? setLoadingApproved : setLoadingRejected;
+    const setApps    = which === "pending" ? setPendingApps    : which === "approved" ? setApprovedApps    : setRejectedApps;
+    const setTotal   = which === "pending" ? setPendingTotal   : which === "approved" ? setApprovedTotal   : setRejectedTotal;
+    const setPages   = which === "pending" ? setPendingPages   : which === "approved" ? setApprovedPages   : setRejectedPages;
+    const endpoint   = which === "pending"
+      ? "/workflow/pending"
+      : which === "approved"
+      ? "/workflow/applications/approved"
+      : "/workflow/applications/rejected";
+
+    setLoading(true);
+    try {
+      const { data } = await API.get(endpoint, { headers, params });
+      setApps(Array.isArray(data) ? data : data?.items || []);
+      if (data?.total != null) setTotal(data.total);
+      if (data?.pages != null) setPages(data.pages);
+    } catch (err) {
+      console.error(`Failed to load ${which}`, err?.response?.data || err?.message);
+      setApps([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [admin, authHeaders]);
+
+  /* ── Fetch all three in parallel on mount ── */
+  const fetchAll = useCallback(async (limit = pageLimit) => {
+    if (!admin) return;
+    const headers = authHeaders();
+    const params  = { page: 1, limit };
     setLoadingPending(true);
     setLoadingApproved(true);
     setLoadingRejected(true);
 
     const [pRes, aRes, rRes] = await Promise.allSettled([
-      API.get("/workflow/pending",                  { headers }),
-      API.get("/workflow/applications/approved",    { headers }),
-      API.get("/workflow/applications/rejected",    { headers }),
+      API.get("/workflow/pending",               { headers, params }),
+      API.get("/workflow/applications/approved", { headers, params }),
+      API.get("/workflow/applications/rejected", { headers, params }),
     ]);
 
     if (pRes.status === "fulfilled") {
       const d = pRes.value.data;
       setPendingApps(Array.isArray(d) ? d : d?.items || []);
+      if (d?.total != null) setPendingTotal(d.total);
+      if (d?.pages != null) setPendingPages(d.pages);
     } else {
       console.error("Failed to load pending",  pRes.reason?.response?.data || pRes.reason?.message);
       setPendingApps([]);
@@ -306,6 +350,8 @@ const Dashboard = () => {
     if (aRes.status === "fulfilled") {
       const d = aRes.value.data;
       setApprovedApps(Array.isArray(d) ? d : d?.items || []);
+      if (d?.total != null) setApprovedTotal(d.total);
+      if (d?.pages != null) setApprovedPages(d.pages);
     } else {
       console.error("Failed to load approved", aRes.reason?.response?.data || aRes.reason?.message);
       setApprovedApps([]);
@@ -315,17 +361,30 @@ const Dashboard = () => {
     if (rRes.status === "fulfilled") {
       const d = rRes.value.data;
       setRejectedApps(Array.isArray(d) ? d : d?.items || []);
+      if (d?.total != null) setRejectedTotal(d.total);
+      if (d?.pages != null) setRejectedPages(d.pages);
     } else {
       console.error("Failed to load rejected", rRes.reason?.response?.data || rRes.reason?.message);
       setRejectedApps([]);
     }
     setLoadingRejected(false);
-  }, [admin, authHeaders]);
+  }, [admin, authHeaders]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!admin) { navigate("/"); return; }
     fetchAll();
   }, [admin, navigate, fetchAll]);
+
+  /* re-fetch active tab when its page changes */
+  useEffect(() => { if (admin) fetchTab("pending",  pendingPage,  pageLimit); }, [pendingPage]);  // eslint-disable-line
+  useEffect(() => { if (admin) fetchTab("approved", approvedPage, pageLimit); }, [approvedPage]); // eslint-disable-line
+  useEffect(() => { if (admin) fetchTab("rejected",  rejectedPage,  pageLimit); }, [rejectedPage]);  // eslint-disable-line
+
+  /* re-fetch all tabs when limit changes, reset pages */
+  useEffect(() => {
+    setPendingPage(1); setApprovedPage(1); setRejectedPage(1);
+    fetchAll(pageLimit);
+  }, [pageLimit]); // eslint-disable-line
 
   useEffect(() => {
     const stateFocus = location?.state?.focus;
@@ -366,7 +425,7 @@ const Dashboard = () => {
   /* ── Derived filter options ── */
   const branchOptions   = useMemo(() => [...new Set(rawData.map(getDealerBranch).filter((v) => v !== "—"))].sort(), [rawData]);
   const districtOptions = useMemo(() => [...new Set(rawData.map(getDealerDistrict).filter((v) => v !== "—"))].sort(), [rawData]);
-  const stageOptions    = useMemo(() => [...new Set(rawData.map(getStage).filter((v) => v !== "—"))].sort(), [rawData]);
+  const stageOptions    = WORKFLOW_STAGES;
 
   /* ── Filtered data ── */
   const filteredData = useMemo(() => {
@@ -381,7 +440,7 @@ const Dashboard = () => {
     }
     if (filterBranch)   d = d.filter((a) => getDealerBranch(a)   === filterBranch);
     if (filterDistrict) d = d.filter((a) => getDealerDistrict(a) === filterDistrict);
-    if (filterStage)    d = d.filter((a) => getStage(a)           === filterStage);
+    if (filterStage)    d = d.filter((a) => toStage(getStage(a))  === toStage(filterStage));
     if (filterDateFrom) {
       const from = new Date(filterDateFrom); from.setHours(0,0,0,0);
       d = d.filter((a) => a?.createdAt && new Date(a.createdAt) >= from);
@@ -524,11 +583,11 @@ const Dashboard = () => {
     enableRowSelection: true,
   });
 
-  const { pageIndex, pageSize } = table.getState().pagination;
-  const pageCount    = table.getPageCount();
-  const totalFiltered = filteredData.length;
-  const pageRows     = table.getRowModel().rows;
-  const totalCount   = pendingApps.length + approvedApps.length + rejectedApps.length;
+  const pageRows      = table.getRowModel().rows;
+  const totalCount    = pendingTotal + approvedTotal + rejectedTotal;
+  const totalFiltered = currentTotal;
+  const rowFrom       = filteredData.length === 0 ? 0 : (currentPage - 1) * pageLimit + 1;
+  const rowTo         = Math.min(currentPage * pageLimit, currentTotal);
 
   /* derived loading for current tab */
   const loading = tab === "pending" ? loadingPending : tab === "approved" ? loadingApproved : loadingRejected;
@@ -636,9 +695,9 @@ const Dashboard = () => {
           {/* KPI badges */}
           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
             {[
-              { label: "Pending",  val: pendingApps.length,  bg: "#FFFBEB", color: "#92400E", border: "#FDE68A" },
-              { label: "Approved", val: approvedApps.length, bg: "#ECFDF5", color: "#065F46", border: "#D1FAE5" },
-              { label: "Rejected", val: rejectedApps.length, bg: "#FFF1F2", color: "#7F1D1D", border: "#FECACA" },
+              { label: "Pending",  val: pendingTotal,  bg: "#FFFBEB", color: "#92400E", border: "#FDE68A" },
+              { label: "Approved", val: approvedTotal, bg: "#ECFDF5", color: "#065F46", border: "#D1FAE5" },
+              { label: "Rejected", val: rejectedTotal, bg: "#FFF1F2", color: "#7F1D1D", border: "#FECACA" },
             ].map(({ label, val, bg, color, border }) => (
               <div key={label} style={{
                 background: bg, border: `1px solid ${border}`, borderRadius: 8,
@@ -702,9 +761,9 @@ const Dashboard = () => {
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
               {[
-                { key: "pending",  label: `Pending`,  count: pendingApps.length  },
-                { key: "approved", label: `Approved`, count: approvedApps.length },
-                { key: "rejected", label: `Rejected`, count: rejectedApps.length },
+                { key: "pending",  label: `Pending`,  count: pendingTotal  },
+                { key: "approved", label: `Approved`, count: approvedTotal },
+                { key: "rejected", label: `Rejected`, count: rejectedTotal },
               ].map(({ key, label, count }) => (
                 <button
                   key={key}
@@ -743,7 +802,7 @@ const Dashboard = () => {
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
             <select className="dt-select" value={filterStage} onChange={(e) => setFilterStage(e.target.value)}>
               <option value="">All Stages</option>
-              {stageOptions.map((s) => <option key={s} value={s}>{s}</option>)}
+              {stageOptions.map((s) => <option key={s} value={toStage(s)}>{stageLabel(s)}</option>)}
             </select>
             <select className="dt-select" value={filterBranch} onChange={(e) => setFilterBranch(e.target.value)}>
               <option value="">All Branches</option>
@@ -804,19 +863,16 @@ const Dashboard = () => {
         }}>
           <span style={{ fontSize: 12, color: "#6B7280", fontWeight: 500 }}>
             Showing{" "}
-            <b style={{ color: "#111827" }}>
-              {totalFiltered === 0 ? 0 : pageIndex * pageSize + 1}–{Math.min((pageIndex + 1) * pageSize, totalFiltered)}
-            </b>{" "}
-            of <b style={{ color: "#111827" }}>{totalFiltered.toLocaleString()}</b> records
-            {hasActiveFilters && ` (filtered from ${rawData.length.toLocaleString()})`}
+            <b style={{ color: "#111827" }}>{rowFrom}–{rowTo}</b>{" "}
+            of <b style={{ color: "#111827" }}>{currentTotal.toLocaleString()}</b> records
           </span>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ fontSize: 12, color: "#6B7280" }}>Rows per page:</span>
             <select
               className="dt-select"
               style={{ padding: "4px 8px", fontSize: 12 }}
-              value={pageSize}
-              onChange={(e) => table.setPageSize(Number(e.target.value))}
+              value={pageLimit}
+              onChange={(e) => setPageLimit(Number(e.target.value))}
             >
               {[25, 50, 100, 200].map((n) => <option key={n} value={n}>{n}</option>)}
             </select>
@@ -917,48 +973,48 @@ const Dashboard = () => {
           </div>
         )}
 
-        {/* ── Pagination ── */}
-        {!loading && pageCount > 1 && (
+        {/* ── Server-side Pagination ── */}
+        {!loading && currentPages > 1 && (
           <div style={{
             display: "flex", alignItems: "center", justifyContent: "space-between",
             padding: "12px 18px", borderTop: "1px solid #F1F5F9", flexWrap: "wrap", gap: 10,
           }}>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              <button className="dt-pgbtn" onClick={() => table.setPageIndex(0)} disabled={!table.getCanPreviousPage()} title="First">«</button>
-              <button className="dt-pgbtn" onClick={() => table.previousPage()} disabled={!table.getCanPreviousPage()}>‹</button>
+              <button className="dt-pgbtn" onClick={() => goToPage(1)} disabled={currentPage <= 1} title="First">«</button>
+              <button className="dt-pgbtn" onClick={() => goToPage(currentPage - 1)} disabled={currentPage <= 1}>‹</button>
               {(() => {
-                const total = pageCount;
-                const current = pageIndex;
+                const total = currentPages;
+                const current = currentPage;
                 const range = [];
-                if (total <= 7) { for (let i = 0; i < total; i++) range.push(i); }
+                if (total <= 7) { for (let i = 1; i <= total; i++) range.push(i); }
                 else {
-                  range.push(0);
-                  if (current > 2) range.push("...");
-                  for (let i = Math.max(1, current - 1); i <= Math.min(total - 2, current + 1); i++) range.push(i);
-                  if (current < total - 3) range.push("...");
-                  range.push(total - 1);
+                  range.push(1);
+                  if (current > 3) range.push("...");
+                  for (let i = Math.max(2, current - 1); i <= Math.min(total - 1, current + 1); i++) range.push(i);
+                  if (current < total - 2) range.push("...");
+                  range.push(total);
                 }
                 return range.map((p, i) => p === "..."
                   ? <span key={`d${i}`} style={{ padding: "0 4px", color: "#9CA3AF", fontSize: 13 }}>…</span>
-                  : <button key={p} className={`dt-pgbtn${p === current ? " active" : ""}`} onClick={() => table.setPageIndex(p)}>{p + 1}</button>
+                  : <button key={p} className={`dt-pgbtn${p === current ? " active" : ""}`} onClick={() => goToPage(p)}>{p}</button>
                 );
               })()}
-              <button className="dt-pgbtn" onClick={() => table.nextPage()} disabled={!table.getCanNextPage()}>›</button>
-              <button className="dt-pgbtn" onClick={() => table.setPageIndex(pageCount - 1)} disabled={!table.getCanNextPage()} title="Last">»</button>
+              <button className="dt-pgbtn" onClick={() => goToPage(currentPage + 1)} disabled={currentPage >= currentPages}>›</button>
+              <button className="dt-pgbtn" onClick={() => goToPage(currentPages)} disabled={currentPage >= currentPages} title="Last">»</button>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span style={{ fontSize: 12, color: "#6B7280" }}>Go to:</span>
               <select
                 className="dt-select"
                 style={{ padding: "4px 8px", fontSize: 12 }}
-                value={pageIndex}
-                onChange={(e) => table.setPageIndex(Number(e.target.value))}
+                value={currentPage}
+                onChange={(e) => goToPage(Number(e.target.value))}
               >
-                {Array.from({ length: pageCount }, (_, i) => (
-                  <option key={i} value={i}>Page {i + 1}</option>
+                {Array.from({ length: currentPages }, (_, i) => (
+                  <option key={i + 1} value={i + 1}>Page {i + 1}</option>
                 ))}
               </select>
-              <span style={{ fontSize: 12, color: "#6B7280" }}>of {pageCount}</span>
+              <span style={{ fontSize: 12, color: "#6B7280" }}>of {currentPages}</span>
             </div>
           </div>
         )}

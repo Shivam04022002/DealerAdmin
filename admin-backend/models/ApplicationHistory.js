@@ -23,6 +23,7 @@ const applicationHistorySchema = new mongoose.Schema(
         "APPROVED",
         "REJECTED",
         "REVOKED",
+        "COMMENT",
         "COMMENT_ADDED",
         "NOTE_ADDED",
         "DOCUMENT_UPLOADED",
@@ -41,6 +42,7 @@ const applicationHistorySchema = new mongoose.Schema(
     newValue: { type: mongoose.Schema.Types.Mixed, default: null },
     remarks: { type: String, default: "" },
     updatedBy: { type: String, required: true },
+    updatedByEmail: { type: String, default: "" },
     updatedByRole: { type: String, default: "admin" },
     updatedByAdminId: {
       type: mongoose.Schema.Types.ObjectId,

@@ -1,88 +1,148 @@
 // src/pages/PendingFiles.jsx
-import React, { useEffect, useState } from "react";
+import React, { useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import API from "../services/api"; // axios helper with baseURL: http://192.168.29.106:5001/api
+import { useApplications } from "../hooks/useApplications";
+import TableSkeleton from "../components/TableSkeleton";
+import { WORKFLOW_STAGES, stageLabel } from "../utils/workflowConfig";
 
 export default function PendingFiles() {
-  const [pending, setPending] = useState([]);
-  const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
+  const searchInputRef = useRef(null);
 
-  useEffect(() => {
-    let mounted = true;
-    const fetchPending = async () => {
-      try {
-        const { data } = await API.get("/workflow/pending");
-        console.log("📌 Pending applications:", data);
-        if (mounted) setPending(Array.isArray(data) ? data : []);
-      } catch (err) {
-        console.error("❌ Error fetching pending files", err);
-        if (mounted) setPending([]);
-      } finally {
-        if (mounted) setLoading(false);
-      }
-    };
-    fetchPending();
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
-  if (loading) {
-    return (
-      <div className="p-6">
-        <h1 className="text-xl font-bold mb-4">Pending Applications</h1>
-        <p>Loading…</p>
-      </div>
-    );
-  }
+  const {
+    items, total, pages, page,
+    isLoading, isFetching, isError,
+    refetch, setPage,
+    handleSearchChange, handleBranchChange, handleStageChange,
+  } = useApplications("pending", 50);
 
   return (
-    <div className="p-6">
-      <h1 className="text-xl font-bold mb-4">Pending Applications</h1>
-      {pending.length === 0 ? (
-        <p>No pending applications found.</p>
-      ) : (
-        <table className="w-full border-collapse border">
-          <thead>
-            <tr className="bg-gray-100">
-              <th className="border p-2">Form ID</th>
-              <th className="border p-2">Applicant Name</th>
-              <th className="border p-2">Dealer Name</th>
-              <th className="border p-2">Dealer Branch</th>
-              <th className="border p-2">Last Updated By</th>
-            </tr>
-          </thead>
-          <tbody>
-            {pending.map((app) => {
-              const applicantName =
-                app?.applicant?.name ||
-                app?.applicant?.applicant?.name ||
-                "—";
-              const dealerName =
-                app?.dealerDetails?.name || app?.dealer?.name || "—";
-              const dealerBranch =
-                app?.dealerDetails?.branch || app?.dealer?.branch || "—";
-              const lastUpdatedBy = app?.history?.length
-                ? app.history[app.history.length - 1]?.updatedBy || "—"
-                : "—";
+    <div className="container py-3">
+      {/* Header */}
+      <div className="d-flex justify-content-between align-items-center mb-3">
+        <h2 className="mb-0">
+          Pending Applications
+          {total > 0 && (
+            <span className="badge bg-secondary ms-2 fs-6">{total}</span>
+          )}
+          {isFetching && !isLoading && (
+            <span className="spinner-border spinner-border-sm text-secondary ms-2" />
+          )}
+        </h2>
+        <button className="btn btn-sm btn-outline-secondary" onClick={() => refetch()}>
+          Refresh
+        </button>
+      </div>
 
-              return (
-                <tr
-                  key={app._id}
-                  className="cursor-pointer hover:bg-gray-50"
-                  onClick={() => navigate(`/pending/${app._id}`)} // ✅ go to ApplicationView
-                >
-                  <td className="border p-2">{app.formId || "—"}</td>
-                  <td className="border p-2">{applicantName}</td>
-                  <td className="border p-2">{dealerName}</td>
-                  <td className="border p-2">{dealerBranch}</td>
-                  <td className="border p-2">{lastUpdatedBy}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+      {/* Filters */}
+      <div className="row g-2 mb-3">
+        <div className="col-12 col-md-5">
+          <input
+            ref={searchInputRef}
+            type="search"
+            className="form-control form-control-sm"
+            placeholder="Search form ID, applicant, dealer…"
+            onChange={(e) => handleSearchChange(e.target.value)}
+          />
+        </div>
+        <div className="col-6 col-md-3">
+          <input
+            type="text"
+            className="form-control form-control-sm"
+            placeholder="Filter by branch"
+            onChange={(e) => handleBranchChange(e.target.value)}
+          />
+        </div>
+        <div className="col-6 col-md-4">
+          <select
+            className="form-select form-select-sm"
+            onChange={(e) => handleStageChange(e.target.value)}
+          >
+            <option value="">All Stages</option>
+            {WORKFLOW_STAGES.map((s) => (
+              <option key={s} value={s}>{stageLabel(s)}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {/* Table */}
+      {isLoading ? (
+        <TableSkeleton rows={10} cols={5} />
+      ) : isError ? (
+        <div className="alert alert-danger">Failed to load applications. <button className="btn btn-sm btn-link p-0" onClick={() => refetch()}>Retry</button></div>
+      ) : items.length === 0 ? (
+        <p className="text-muted">No pending applications found.</p>
+      ) : (
+        <div className="table-responsive" style={{ opacity: isFetching ? 0.6 : 1, transition: "opacity 0.15s" }}>
+          <table className="table table-striped table-hover align-middle mb-0">
+            <thead className="table-light">
+              <tr>
+                <th>Form ID</th>
+                <th>Applicant</th>
+                <th>Dealer</th>
+                <th>Branch</th>
+                <th>Stage</th>
+                <th>Updated</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((app) => {
+                const applicantName = app?.applicant?.applicant?.name || app?.applicant?.name || "—";
+                const dealerName   = app?.dealerDetails?.name   || "—";
+                const branch       = app?.dealerDetails?.branch || "—";
+                const updatedAt    = app?.updatedAt ? new Date(app.updatedAt).toLocaleDateString() : "—";
+
+                return (
+                  <tr
+                    key={app._id}
+                    style={{ cursor: "pointer" }}
+                    onClick={() => navigate(`/pending/${app._id}`)}
+                  >
+                    <td className="text-primary fw-semibold">{app.formId || "—"}</td>
+                    <td>{applicantName}</td>
+                    <td>{dealerName}</td>
+                    <td>{branch}</td>
+                    <td>
+                      <span className="badge bg-warning text-dark">
+                        {app.workflowStage || "—"}
+                      </span>
+                    </td>
+                    <td className="text-muted small">{updatedAt}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Pagination */}
+      {pages > 1 && (
+        <div className="d-flex justify-content-between align-items-center mt-3">
+          <small className="text-muted">
+            Page {page} of {pages} · {total} total
+          </small>
+          <nav>
+            <ul className="pagination pagination-sm mb-0">
+              <li className={`page-item ${page <= 1 ? "disabled" : ""}`}>
+                <button className="page-link" onClick={() => setPage((p) => p - 1)}>‹ Prev</button>
+              </li>
+              {Array.from({ length: Math.min(pages, 7) }, (_, i) => {
+                const p = page <= 4 ? i + 1 : page - 3 + i;
+                if (p < 1 || p > pages) return null;
+                return (
+                  <li key={p} className={`page-item ${p === page ? "active" : ""}`}>
+                    <button className="page-link" onClick={() => setPage(p)}>{p}</button>
+                  </li>
+                );
+              })}
+              <li className={`page-item ${page >= pages ? "disabled" : ""}`}>
+                <button className="page-link" onClick={() => setPage((p) => p + 1)}>Next ›</button>
+              </li>
+            </ul>
+          </nav>
+        </div>
       )}
     </div>
   );

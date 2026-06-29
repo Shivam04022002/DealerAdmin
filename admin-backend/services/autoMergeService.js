@@ -11,9 +11,10 @@ import mongoose from "mongoose";
 import ApprovedApplication from "../models/ApprovedApplication.js";
 import RejectedApplication from "../models/RejectedApplication.js";
 
+import { toStage, normalizeWorkflows, WORKFLOW_STAGES } from "../utils/workflowConstants.js";
+
 /* ---------- helpers ---------- */
-const DEFAULT_START_STAGE = "contact creation";
-const toStage = (s) => String(s || "").trim().toLowerCase();
+const DEFAULT_START_STAGE = WORKFLOW_STAGES[0];
 
 function asPlain(doc) {
   return doc?.toObject ? doc.toObject() : doc;
@@ -35,19 +36,7 @@ function sanitizeDealer(userDoc) {
   return hasInfo ? snapshot : null;
 }
 
-const parseWorkflows = (wf) => {
-  if (Array.isArray(wf)) return [...new Set(wf.map(toStage))];
-  if (typeof wf === "string") {
-    const parts = wf
-      .replace(/\r/g, "")
-      .split(/[\n,]+/)
-      .map((s) => s.trim().replace(/^['"]|['"]$/g, ""))
-      .filter(Boolean)
-      .map(toStage);
-    return [...new Set(parts)];
-  }
-  return [];
-};
+const parseWorkflows = normalizeWorkflows;
 
 async function getFirstAdminWorkflowStage() {
   try {

@@ -25,12 +25,13 @@ const approvedApplicationSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-approvedApplicationSchema.index({ formId: 1 });
 approvedApplicationSchema.index({ createdAt: -1 });
 approvedApplicationSchema.index({ workflowStage: 1 });
 approvedApplicationSchema.index({ "dealerDetails.branch": 1 });
 approvedApplicationSchema.index({ "dealerDetails.district": 1 });
 approvedApplicationSchema.index({ dealer: 1 });
+approvedApplicationSchema.index({ "dealerDetails.branch": 1, createdAt: -1 });
+approvedApplicationSchema.index({ "dealerDetails.name": 1 });
 
 export default mongoose.model(
   "ApprovedApplication",

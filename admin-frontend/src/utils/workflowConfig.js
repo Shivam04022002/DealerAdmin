@@ -1,12 +1,12 @@
 /**
- * workflowConstants.js — SINGLE SOURCE OF TRUTH for workflow stages.
+ * workflowConfig.js — SINGLE SOURCE OF TRUTH for workflow stages (frontend mirror).
  *
- * Every stage definition lives here.  All backend controllers, frontend
- * pages, and the mobile app must import from this file (or its mirror).
+ * This file MUST stay in sync with admin-backend/utils/workflowConstants.js.
+ * All admin-panel pages, components, and hooks must import from here.
  * Never hardcode stage names, labels, colors, or orders anywhere else.
  */
 
-// ─── Canonical stage keys (lowercase, stored in DB) ──────────────────────────
+// ─── Canonical stage keys (lowercase, matches DB values) ─────────────────────
 export const WORKFLOW_STAGES = [
   "contact creation",
   "house visit",
@@ -17,10 +17,10 @@ export const WORKFLOW_STAGES = [
   "disbursed",
 ];
 
-// ─── Stages that trigger moving the application to the Approved collection ───
+// ─── Stages that represent final approval ────────────────────────────────────
 export const FINAL_STAGES = ["disbursed"];
 
-// ─── Human-readable display labels (used in UI, notifications, history) ──────
+// ─── Human-readable display labels ───────────────────────────────────────────
 export const STAGE_LABELS = {
   "contact creation":               "Contact Creation",
   "house visit":                    "House Visit",
@@ -31,7 +31,7 @@ export const STAGE_LABELS = {
   "disbursed":                      "Disbursed",
 };
 
-// ─── Badge colours (admin web + used as reference for mobile) ────────────────
+// ─── Badge colours ────────────────────────────────────────────────────────────
 export const STAGE_COLORS = {
   "contact creation":               { bg: "#F5F3FF", color: "#6D28D9", border: "#DDD6FE" },
   "house visit":                    { bg: "#EFF6FF", color: "#1D4ED8", border: "#BFDBFE" },
@@ -43,12 +43,11 @@ export const STAGE_COLORS = {
 };
 
 // ─── Legacy key aliases (old DB values → canonical key) ──────────────────────
-// Used by toStage() so existing records migrate transparently.
 export const STAGE_ALIASES = {
   "housevisit":    "house visit",
   "house-visit":   "house visit",
   "pd visit":      "house visit",
-  "cibil":         "contact creation",   // cibil was merged into contact creation
+  "cibil":         "contact creation",
   "disbursement":  "disbursed",
 };
 
@@ -60,37 +59,28 @@ export const toStage = (s) => {
   return STAGE_ALIASES[raw] ?? raw;
 };
 
-/** Display label for a stage key. Falls back to title-cased key. */
+/** Display label for a stage. */
 export const stageLabel = (s) => {
   const key = toStage(s);
   return STAGE_LABELS[key] ?? key.replace(/\b\w/g, (c) => c.toUpperCase());
 };
 
-/** Badge colour object for a stage key. */
+/** Badge colour object for a stage. */
 export const stageColor = (s) => {
   const key = toStage(s);
   return STAGE_COLORS[key] ?? { bg: "#F1F5F9", color: "#475569", border: "#CBD5E1" };
 };
 
-/** True if the stage key is a final (disbursed) stage. */
+/** True if the stage is a final/disbursed stage. */
 export const isFinalStage = (s) => FINAL_STAGES.includes(toStage(s));
 
-/** True if the given key is a recognised workflow stage. */
+/** True if the key is a recognised workflow stage. */
 export const isValidStage = (s) => WORKFLOW_STAGES.includes(toStage(s));
 
-/** Return the next stage after `current`, or the last stage if already final. */
+/** Return the next stage after `current`. */
 export const getNextStage = (current) => {
   const idx = WORKFLOW_STAGES.indexOf(toStage(current));
   if (idx === -1) return WORKFLOW_STAGES[0];
   if (idx >= WORKFLOW_STAGES.length - 1) return WORKFLOW_STAGES[WORKFLOW_STAGES.length - 1];
   return WORKFLOW_STAGES[idx + 1];
-};
-
-/** Normalise a workflows array or multi-line string into canonical keys. */
-export const normalizeWorkflows = (wf) => {
-  if (!wf) return [];
-  const arr = Array.isArray(wf)
-    ? wf.flat()
-    : String(wf).replace(/[\[\]"']/g, "").split(/[\n,]+/);
-  return [...new Set(arr.map((s) => s.trim()).filter(Boolean).map(toStage))];
 };

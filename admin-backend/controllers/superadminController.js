@@ -9,6 +9,7 @@ import ApprovedApplication from "../models/ApprovedApplication.js";
 import RejectedApplication from "../models/RejectedApplication.js";
 import { sendPushNotification } from "../utils/sendPushNotification.js";
 import { createHistoryEntry } from "./formTrackingController.js";
+import { getStatCounts, getPendingAccessFilter, buildFinalizedFilter } from "../utils/accessFilter.js";
 
 export const createAdmin = async (req, res) => {
   try {
@@ -223,26 +224,16 @@ export const deleteAdmin = async (req, res) => {
 
 export const applicationStats = async (req, res) => {
   try {
-    const [pendingCount, approvedCount, rejectedCount] = await Promise.all([
-      Application.countDocuments({ $or: [
-        { status: { $in: ["pending", null] } },
-        { workflowStage: { $exists: false } },
-        { workflowStage: { $nin: ["disbursed", "rejected", "approved"] } }
-      ]}),
-      ApprovedApplication.countDocuments(),
-      RejectedApplication.countDocuments()
-    ]);
-
-    const total = pendingCount + approvedCount + rejectedCount;
-
-    return res.json({
-      stats: {
-        pending: pendingCount,
-        approved: approvedCount,
-        rejected: rejectedCount,
-        total: total
-      }
-    });
+    // Superadmin route — req.admin is always superadmin here, so getStatCounts
+    // returns global unfiltered counts.  The same helper is used by /workflow/stats
+    // for regular admins, ensuring both paths share identical counting logic.
+    const counts = await getStatCounts(
+      req.admin,
+      Application,
+      ApprovedApplication,
+      RejectedApplication
+    );
+    return res.json({ stats: counts });
   } catch (err) {
     console.error("applicationStats:", err);
     return res.status(500).json({ message: "Server error" });
@@ -254,33 +245,45 @@ export const getFilesByType = async (req, res) => {
     const { type } = req.params;
     let applications = [];
 
-    switch (type) {
-      case "pending":
-        applications = await Application.find({
-          $or: [
-            { status: { $in: ["pending", null] } },
-            { workflowStage: { $exists: false } },
-            { workflowStage: { $nin: ["disbursed", "rejected", "approved"] } }
-          ]
-        })
-        .select("formId applicant coApplicant vehicleDetails dealer dealerDetails status workflowStage createdAt updatedAt")
-        .populate("dealer", "email userId name district branch")
-        .lean();
-        break;
+    const basePending = {
+      $or: [
+        { status: { $in: ["pending", null] } },
+        { workflowStage: { $exists: false } },
+        { workflowStage: { $nin: ["disbursed", "rejected", "approved"] } },
+      ],
+    };
 
-      case "approved":
-        applications = await ApprovedApplication.find()
+    switch (type) {
+      case "pending": {
+        const accessFilter = getPendingAccessFilter(req.admin);
+        const filter =
+          Object.keys(accessFilter).length === 0
+            ? basePending
+            : { $and: [basePending, accessFilter] };
+        applications = await Application.find(filter)
+          .select("formId applicant coApplicant vehicleDetails dealer dealerDetails status workflowStage createdAt updatedAt")
+          .populate("dealer", "email userId name district branch")
+          .lean();
+        break;
+      }
+
+      case "approved": {
+        const filter = await buildFinalizedFilter(req.admin);
+        applications = await ApprovedApplication.find(filter)
           .select("formId applicant coApplicant vehicleDetails dealer dealerDetails status workflowStage approvedAt createdAt updatedAt")
           .populate("dealer", "email userId name district branch")
           .lean();
         break;
+      }
 
-      case "rejected":
-        applications = await RejectedApplication.find()
+      case "rejected": {
+        const filter = await buildFinalizedFilter(req.admin);
+        applications = await RejectedApplication.find(filter)
           .select("formId applicant coApplicant vehicleDetails dealer dealerDetails status workflowStage rejectedAt reason createdAt updatedAt")
           .populate("dealer", "email userId name district branch")
           .lean();
         break;
+      }
 
       default:
         return res.status(400).json({ message: "Invalid type. Use: pending, approved, or rejected" });

@@ -1,6 +1,12 @@
 // routes/workflowRoutes.js
 import express from 'express';
 import {
+  WORKFLOW_STAGES,
+  STAGE_LABELS,
+  STAGE_COLORS,
+  FINAL_STAGES,
+} from '../utils/workflowConstants.js';
+import {
   getPendingApplications,
   updateWorkflowStage,
   rejectApplication,
@@ -11,13 +17,25 @@ import {
   approveApplication,
   getApprovedApplications,
   getApprovedApplicationById,
-  fixDealerForApplications
+  fixDealerForApplications,
+  getApplicationHistory,
+  addApplicationComment,
+  getWorkflowStats,
+  normalizeAllWorkflowStages,
 } from '../controllers/workflowController.js';
 import protect from '../middleware/authMiddleware.js';
 import Application from "../models/Application.js";
 import { autoMergeApplications } from '../services/autoMergeService.js';
 
 const router = express.Router();
+
+// ── Shared stage config (public — used by mobile app + admin frontend) ────────
+router.get('/stages', (_req, res) => {
+  res.json({ stages: WORKFLOW_STAGES, labels: STAGE_LABELS, colors: STAGE_COLORS, finalStages: FINAL_STAGES });
+});
+
+// ── Permission-aware stats (used by admin Dashboard, not superadmin panel) ───
+router.get('/stats', protect, getWorkflowStats);
 
 // primary endpoints
 router.get('/pending', protect, getPendingApplications);
@@ -41,8 +59,13 @@ router.get('/applications/rejected', protect, getRejectedApplications);
 router.get('/applications/approved/:id', protect, getApprovedApplicationById);
 router.get('/applications/rejected/:id', protect, getRejectedApplicationById);
 
+// audit history + internal comments (admin/superadmin only — no dealer access)
+router.get('/applications/:id/history',  protect, getApplicationHistory);
+router.post('/applications/:id/comments', protect, addApplicationComment);
+
 // maintenance
 router.post('/fix-dealers', protect, fixDealerForApplications);
+router.post('/normalize-stages', protect, normalizeAllWorkflowStages);
 
 // manual merge trigger (non-blocking, runs in background)
 router.post('/merge', protect, (req, res) => {

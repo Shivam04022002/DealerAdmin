@@ -6,31 +6,18 @@ import api from "../services/api";
 import FilePreview from "../components/FilePreview";
 import DashboardLayout from "../components/layout/DashboardLayout";
 import ActivityHistoryDrawer from "../components/ActivityHistoryDrawer";
+import {
+  WORKFLOW_STAGES,
+  toStage,
+  stageLabel,
+  isFinalStage,
+  getNextStage,
+} from "../utils/workflowConfig";
 
 export default function ApplicationView() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { admin } = useAuth() || {};
-
-  // Full linear workflow (lowercase)
-  const WORKFLOW = [
-    "contact creation",
-    "cibil",
-    "housevisit",
-    "document collection",
-    "credit sanction",
-    "agreement",
-    "pre-disbursement documentation",
-    "disbursement",
-    "disbursed",
-  ].map((s) => String(s || "").toLowerCase());
-
-  function getNextStage(current) {
-    const idx = WORKFLOW.indexOf(String(current || "").toLowerCase());
-    if (idx === -1) return WORKFLOW[0];
-    if (idx >= WORKFLOW.length - 1) return WORKFLOW[WORKFLOW.length - 1];
-    return WORKFLOW[idx + 1];
-  }
 
   // Refs for right-column sections
   const applicantRef = useRef(null);
@@ -65,10 +52,9 @@ export default function ApplicationView() {
     setUpdating(true);
 
     try {
-      const currentStage = String(app.workflowStage || "").toLowerCase();
+      const currentStage = toStage(app.workflowStage || "");
       const nextStage = getNextStage(currentStage);
-      const FINAL_STAGES = ["disbursement", "disbursed"];
-      const currentIsFinal = FINAL_STAGES.includes(currentStage);
+      const currentIsFinal = isFinalStage(currentStage);
 
       if (currentIsFinal) {
         try {
@@ -133,8 +119,8 @@ export default function ApplicationView() {
     if (stageChanging) return;
     setStageChanging(true);
     try {
-      const currentStage = String(app.workflowStage || "").toLowerCase();
-      if (String(targetStage || "").toLowerCase() === currentStage) {
+      const currentStage = toStage(app.workflowStage || "");
+      if (toStage(targetStage) === currentStage) {
         setStageChanging(false);
         return;
       }
@@ -250,25 +236,18 @@ export default function ApplicationView() {
     })();
   }, [id]);
 
-  // Fetch admin workflow
+  // Admin's allowed stages come from auth context; fall back to full list
   useEffect(() => {
-    (async () => {
-      setLoadingWorkflow(true);
-      try {
-        const { data } = await api.get("/admin/workflow");
-        const workflowArr = Array.isArray(data?.workflow)
-          ? data.workflow
-          : typeof data?.workflow === "string"
-          ? data.workflow.split(/[,\\n]+/)
-          : [];
-        setAdminWorkflow(workflowArr);
-      } catch (err) {
-        console.error("Failed to fetch admin workflow");
-      } finally {
-        setLoadingWorkflow(false);
-      }
-    })();
-  }, []);
+    const raw = admin?.workflows;
+    if (raw && (Array.isArray(raw) ? raw.length > 0 : String(raw).trim())) {
+      const parsed = Array.isArray(raw)
+        ? raw.flat().map(toStage).filter(Boolean)
+        : String(raw).replace(/[\[\]"']/g, "").split(/[\n,]+/).map(toStage).filter(Boolean);
+      setAdminWorkflow([...new Set(parsed)]);
+    } else {
+      setAdminWorkflow(WORKFLOW_STAGES);
+    }
+  }, [admin]);
 
   // Helpers
   const applicantData = app?.applicant?.applicant || app?.applicant || null;
@@ -631,7 +610,23 @@ export default function ApplicationView() {
             <div style={S.sectionDividerWrap}><hr style={S.sectionDivider} /><hr style={S.sectionDivider} /></div>
 
             <div style={S.fieldLabel}><b>Current Stage</b></div>
-            <p style={S.fieldValue}>{app?.workflowStage || "—"}</p>
+            <p style={{ ...S.fieldValue, fontWeight: 700, textTransform: "capitalize" }}>
+              {stageLabel(app?.workflowStage) || "—"}
+            </p>
+            {stageChanging && <p style={{ fontSize: 12, color: "#64748b" }}>Changing stage…</p>}
+            <div style={{ marginTop: 8 }}>
+              <label style={{ ...S.fieldLabel, marginBottom: 4 }}><b>Change Stage</b></label>
+              <select
+                style={{ width: "100%", padding: "7px 10px", borderRadius: 8, border: "1px solid #e2e8f0", fontSize: 13 }}
+                value={toStage(app?.workflowStage || "")}
+                disabled={stageChanging}
+                onChange={(e) => changeStage(e.target.value)}
+              >
+                {WORKFLOW_STAGES.filter((s) => adminWorkflow.includes(s) || adminWorkflow.length === 0).map((s) => (
+                  <option key={s} value={s}>{stageLabel(s)}</option>
+                ))}
+              </select>
+            </div>
           </div>
 
           {/* ──── Floating Buttons ──── */}
@@ -650,7 +645,7 @@ export default function ApplicationView() {
             >
               📋 Activity History
             </button>
-            {["disbursed"].includes(String(app?.workflowStage || "").toLowerCase()) ? (
+            {isFinalStage(app?.workflowStage) ? (
               <button
                 onClick={handleApprove}
                 disabled={approving}
