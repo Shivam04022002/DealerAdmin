@@ -1,8 +1,64 @@
 // src/pages/ApprovedFiles.jsx
-import React from "react";
+import React, { useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useApplications } from "../hooks/useApplications";
 import TableSkeleton from "../components/TableSkeleton";
+
+/* ─── Memoized row ────────────────────────────────────────────────────────── */
+const ApprovedRow = React.memo(function ApprovedRow({ app, onClick }) {
+  const applicantName = app?.applicant?.applicant?.name || app?.applicant?.name || "—";
+  const dealerName    = app?.dealerDetails?.name     || "—";
+  const branch        = app?.dealerDetails?.branch   || "—";
+  const district      = app?.dealerDetails?.district || "—";
+  const approvedAt    = app?.updatedAt ? new Date(app.updatedAt).toLocaleDateString() : "—";
+  return (
+    <tr key={app._id}>
+      <td className="text-primary fw-semibold">{app.formId || "—"}</td>
+      <td>{applicantName}</td>
+      <td>{dealerName}</td>
+      <td>{branch}</td>
+      <td>{district}</td>
+      <td className="text-muted small">{approvedAt}</td>
+      <td className="text-end">
+        <button className="btn btn-sm btn-outline-primary" onClick={onClick}>View</button>
+      </td>
+    </tr>
+  );
+});
+
+/* ─── Memoized pagination ─────────────────────────────────────────────────── */
+const Pagination = React.memo(function Pagination({ page, pages, total, setPage }) {
+  const pageNumbers = useMemo(() => {
+    const nums = [];
+    const count = Math.min(pages, 7);
+    for (let i = 0; i < count; i++) {
+      const p = page <= 4 ? i + 1 : page - 3 + i;
+      if (p >= 1 && p <= pages) nums.push(p);
+    }
+    return nums;
+  }, [page, pages]);
+  if (pages <= 1) return null;
+  return (
+    <div className="d-flex justify-content-between align-items-center mt-3">
+      <small className="text-muted">Page {page} of {pages} · {total} total</small>
+      <nav>
+        <ul className="pagination pagination-sm mb-0">
+          <li className={`page-item ${page <= 1 ? "disabled" : ""}`}>
+            <button className="page-link" onClick={() => setPage((p) => p - 1)}>‹ Prev</button>
+          </li>
+          {pageNumbers.map((p) => (
+            <li key={p} className={`page-item ${p === page ? "active" : ""}`}>
+              <button className="page-link" onClick={() => setPage(p)}>{p}</button>
+            </li>
+          ))}
+          <li className={`page-item ${page >= pages ? "disabled" : ""}`}>
+            <button className="page-link" onClick={() => setPage((p) => p + 1)}>Next ›</button>
+          </li>
+        </ul>
+      </nav>
+    </div>
+  );
+});
 
 const ApprovedFiles = () => {
   const navigate = useNavigate();
@@ -13,6 +69,11 @@ const ApprovedFiles = () => {
     refetch, setPage,
     handleSearchChange, handleBranchChange,
   } = useApplications("approved", 50);
+
+  const makeRowClick = useCallback(
+    (id) => () => navigate(`/approved/${id}`),
+    [navigate],
+  );
 
   return (
     <div className="container py-3">
@@ -60,7 +121,7 @@ const ApprovedFiles = () => {
       ) : items.length === 0 ? (
         <p className="text-muted">No approved applications found.</p>
       ) : (
-        <div className="table-responsive" style={{ opacity: isFetching ? 0.6 : 1, transition: "opacity 0.15s" }}>
+        <div className="table-responsive" style={{ opacity: isFetching ? 0.75 : 1, transition: "opacity 0.2s" }}>
           <table className="table table-striped table-hover align-middle mb-0">
             <thead className="table-light">
               <tr>
@@ -74,66 +135,15 @@ const ApprovedFiles = () => {
               </tr>
             </thead>
             <tbody>
-              {items.map((app) => {
-                const applicantName = app?.applicant?.applicant?.name || app?.applicant?.name || "—";
-                const dealerName   = app?.dealerDetails?.name     || "—";
-                const branch       = app?.dealerDetails?.branch   || "—";
-                const district     = app?.dealerDetails?.district || "—";
-                const approvedAt   = app?.updatedAt
-                  ? new Date(app.updatedAt).toLocaleDateString()
-                  : "—";
-
-                return (
-                  <tr key={app._id}>
-                    <td className="text-primary fw-semibold">{app.formId || "—"}</td>
-                    <td>{applicantName}</td>
-                    <td>{dealerName}</td>
-                    <td>{branch}</td>
-                    <td>{district}</td>
-                    <td className="text-muted small">{approvedAt}</td>
-                    <td className="text-end">
-                      <button
-                        className="btn btn-sm btn-outline-primary"
-                        onClick={() => navigate(`/approved/${app._id}`)}
-                      >
-                        View
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
+              {items.map((app) => (
+                <ApprovedRow key={app._id} app={app} onClick={makeRowClick(app._id)} />
+              ))}
             </tbody>
           </table>
         </div>
       )}
 
-      {/* Pagination */}
-      {pages > 1 && (
-        <div className="d-flex justify-content-between align-items-center mt-3">
-          <small className="text-muted">
-            Page {page} of {pages} · {total} total
-          </small>
-          <nav>
-            <ul className="pagination pagination-sm mb-0">
-              <li className={`page-item ${page <= 1 ? "disabled" : ""}`}>
-                <button className="page-link" onClick={() => setPage((p) => p - 1)}>‹ Prev</button>
-              </li>
-              {Array.from({ length: Math.min(pages, 7) }, (_, i) => {
-                const p = page <= 4 ? i + 1 : page - 3 + i;
-                if (p < 1 || p > pages) return null;
-                return (
-                  <li key={p} className={`page-item ${p === page ? "active" : ""}`}>
-                    <button className="page-link" onClick={() => setPage(p)}>{p}</button>
-                  </li>
-                );
-              })}
-              <li className={`page-item ${page >= pages ? "disabled" : ""}`}>
-                <button className="page-link" onClick={() => setPage((p) => p + 1)}>Next ›</button>
-              </li>
-            </ul>
-          </nav>
-        </div>
-      )}
+      <Pagination page={page} pages={pages} total={total} setPage={setPage} />
     </div>
   );
 };

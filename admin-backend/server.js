@@ -116,12 +116,23 @@ const startServer = async () => {
             console.log(`Server running in ${process.env.NODE_ENV || 'development'} mode on port ${PORT}`);
         });
 
-        // Run autoMerge once in the background after startup — never blocks requests
+        // Startup sweep — catch anything submitted while server was down
         setImmediate(() => {
             autoMergeApplications()
-                .then(() => console.log('[autoMerge] Background merge complete'))
-                .catch((err) => console.error('[autoMerge] Background merge failed:', err.message));
+                .then((s) => console.log('[autoMerge] Startup sweep complete', s))
+                .catch((err) => console.error('[autoMerge] Startup sweep failed:', err.message));
         });
+
+        // Recovery interval — safety net for any orphaned records.
+        // Primary merge path is POST /api/workflow/merge/:formId (called by mobile backend).
+        // This catches edge cases: network failures, retries, or mobile backend not yet updated.
+        const RECOVERY_INTERVAL_MS = 60 * 1000; // 60 seconds
+        setInterval(() => {
+            autoMergeApplications()
+                .then((s) => { if (s.merged > 0) console.log('[autoMerge] Recovery sweep merged', s.merged, 'orphaned records'); })
+                .catch((err) => console.error('[autoMerge] Recovery sweep failed:', err.message));
+        }, RECOVERY_INTERVAL_MS);
+        console.log(`[autoMerge] Recovery sweep scheduled every ${RECOVERY_INTERVAL_MS / 1000}s`);
 
         // Graceful shutdown
         const shutdown = (signal) => {

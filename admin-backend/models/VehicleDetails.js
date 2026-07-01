@@ -11,4 +11,7 @@ const vehicleDetailsSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
+vehicleDetailsSchema.index({ formId: 1 });
+vehicleDetailsSchema.index({ user: 1 });
+
 export default mongoose.model("VehicleDetails", vehicleDetailsSchema, "vehicledetails");

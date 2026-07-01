@@ -6,6 +6,7 @@ import api from "../services/api";
 import FilePreview from "../components/FilePreview";
 import DashboardLayout from "../components/layout/DashboardLayout";
 import ActivityHistoryDrawer from "../components/ActivityHistoryDrawer";
+import { usePendingInvalidate } from "../hooks/useApplications";
 import {
   WORKFLOW_STAGES,
   toStage,
@@ -18,6 +19,7 @@ export default function ApplicationView() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { admin } = useAuth() || {};
+  const invalidatePending = usePendingInvalidate();
 
   // Refs for right-column sections
   const applicantRef = useRef(null);
@@ -106,6 +108,7 @@ export default function ApplicationView() {
       if (!currentIsFinal) {
         alert(`Moved to stage: ${nextStage}`);
       } else {
+        invalidatePending();
         navigate("/approved");
       }
     } finally {
@@ -183,6 +186,7 @@ export default function ApplicationView() {
         approvedByName: "Admin",
       });
       alert(res.data?.message || "Application approved successfully");
+      invalidatePending();
       if (admin?.role === "superadmin") {
         navigate("/superadmin-dashboard", { state: { focus: "files", filesTab: "pending" } });
       } else {
@@ -209,6 +213,7 @@ export default function ApplicationView() {
         rejectedByName: "Admin",
       });
       alert("Application rejected!");
+      invalidatePending();
       if (admin?.role === "superadmin") {
         navigate("/superadmin-dashboard", { state: { focus: "files", filesTab: "pending" } });
       } else {

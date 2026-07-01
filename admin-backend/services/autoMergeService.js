@@ -1,4 +1,4 @@
-// services/autoMergeService.js (updated autoMergeApplications)
+// services/autoMergeService.js
 import Application from "../models/Application.js";
 import Applicant from "../models/Applicant.js";
 import CoApplicant from "../models/CoApplicant.js";
@@ -7,7 +7,6 @@ import User from "../models/User.js";
 import Admin from "../models/Admin.js";
 import mongoose from "mongoose";
 
-// NEW imports for finalization checks
 import ApprovedApplication from "../models/ApprovedApplication.js";
 import RejectedApplication from "../models/RejectedApplication.js";
 
@@ -31,7 +30,6 @@ function sanitizeDealer(userDoc) {
     district: u.district ?? u.District ?? null,
     branch:   u.branch   ?? u.Branch   ?? null,
   };
-
   const hasInfo = Object.entries(snapshot).some(([k, v]) => k !== "_id" && v);
   return hasInfo ? snapshot : null;
 }
@@ -49,31 +47,54 @@ async function getFirstAdminWorkflowStage() {
   }
 }
 
-// Try resolving dealer from multiple places
+/**
+ * Optimized dealer resolution.
+ *
+ * OLD: up to 5 sequential awaits (waterfall).
+ * NEW: collect all candidate IDs first, then fire one Promise.all batch.
+ *      Falls back to a single $or query for non-ObjectId identifiers only
+ *      when the batch yields nothing.
+ *
+ * Performance gain: reduces up to 10 sequential DB round-trips to 1–2 parallel queries.
+ */
 async function resolveDealer({ vehicle, applicant, coApplicant }) {
-  const tryFindUser = async (id) => {
-    if (!id) return null;
-    // try ObjectId
-    try {
-      if (mongoose.Types.ObjectId.isValid(String(id))) {
-        const byId = await User.findById(id).lean();
-        if (byId) return byId;
-      }
-    } catch {}
-    // try userId / UserId / email
-    return await User.findOne({
-      $or: [{ userId: id }, { UserId: id }, { email: id }],
-    }).lean();
-  };
+  // Collect all ObjectId candidates (deduplicated)
+  const objectIdCandidates = [
+    vehicle?.user,
+    vehicle?.dealerId,
+    applicant?.user,
+    coApplicant?.user,
+  ]
+    .filter(Boolean)
+    .filter((id) => mongoose.Types.ObjectId.isValid(String(id)))
+    .map((id) => new mongoose.Types.ObjectId(String(id)));
 
-  return (
-    (await tryFindUser(vehicle?.user)) ||
-    (await tryFindUser(vehicle?.dealerId)) ||
-    (await tryFindUser(vehicle?.dealerDetails?.UserId)) ||
-    (await tryFindUser(applicant?.user)) ||
-    (await tryFindUser(coApplicant?.user)) ||
-    null
-  );
+  // Deduplicate by string representation
+  const uniqueIds = [...new Map(objectIdCandidates.map((id) => [id.toString(), id])).values()];
+
+  if (uniqueIds.length > 0) {
+    // Single query: find any user whose _id is in the candidate set
+    const found = await User.findOne({ _id: { $in: uniqueIds } }).lean();
+    if (found) return found;
+  }
+
+  // Fallback: non-ObjectId identifiers (UserId string, email)
+  const stringCandidates = [
+    vehicle?.dealerDetails?.UserId,
+    vehicle?.dealerDetails?.email,
+  ].filter(Boolean);
+
+  if (stringCandidates.length > 0) {
+    const orClauses = stringCandidates.flatMap((val) => [
+      { userId: val },
+      { UserId: val },
+      { email: val },
+    ]);
+    const found = await User.findOne({ $or: orClauses }).lean();
+    if (found) return found;
+  }
+
+  return null;
 }
 
 function ensureDealerId(resolvedDealer, applicant) {
@@ -83,106 +104,139 @@ function ensureDealerId(resolvedDealer, applicant) {
   return null;
 }
 
-/* ---------- merge ---------- */
-export const autoMergeApplications = async () => {
-  const vehicles = await VehicleDetails.find().lean();
-  if (!vehicles.length) return;
+/**
+ * Build the finalization OR-query for approved/rejected checks.
+ * Extracted so it can be reused without duplication.
+ */
+function buildFinalizationQuery(formId, applicant, coApplicant, vehicle) {
+  const orClauses = [{ formId }];
+  if (applicant?._id) {
+    orClauses.push(
+      { "applicantSnapshot._id": String(applicant._id) },
+      { applicantId: String(applicant._id) },
+      { "applicant._id": String(applicant._id) }
+    );
+  }
+  if (coApplicant?._id) {
+    orClauses.push(
+      { "coApplicantSnapshot._id": String(coApplicant._id) },
+      { coApplicantId: String(coApplicant._id) },
+      { "coApplicant._id": String(coApplicant._id) }
+    );
+  }
+  if (vehicle?._id) {
+    orClauses.push(
+      { "vehicleSnapshot._id": String(vehicle._id) },
+      { vehicleDetailsId: String(vehicle._id) },
+      { "vehicleDetails._id": String(vehicle._id) }
+    );
+  }
+  return { $or: orClauses };
+}
 
-  const initialStage = toStage(await getFirstAdminWorkflowStage());
+/* ============================================================
+   mergeSingleApplication(formId)
+   ============================================================
+   Merges exactly ONE application identified by formId.
 
-  for (const vehicle of vehicles) {
-    const formId =
-      vehicle?.formId ||
-      vehicle?.formID ||
-      vehicle?.applicantFormId ||
-      vehicle?.applicantFormID ||
-      vehicle?.form?.formId ||
-      vehicle?.form?.id ||
-      null;
+   Called by:
+     - POST /api/workflow/merge/:formId  (immediate, from mobile backend)
+     - autoMergeApplications()           (bulk recovery loop)
 
-    if (!formId) continue;
+   Performance improvements over the old inline loop body:
+     1. Parallel fetch: Applicant + CoApplicant + VehicleDetails + duplicate
+        checks all fire as Promise.all — 4 queries instead of 6–8 serial.
+     2. resolveDealer uses a single batched User query instead of waterfall.
+     3. Structured timing logs at every stage for easy debugging.
+   ============================================================ */
+export async function mergeSingleApplication(formId) {
+  const t0 = Date.now();
+  const tag = `[merge:${formId}]`;
 
-    // already merged?
-    const exists = await Application.findOne({ formId }).lean();
-    if (exists) continue;
+  console.log(`${tag} Merge started`);
 
-    // fetch related docs
-    const applicant =
-      (await Applicant.findOne({ formId }).lean()) ||
-      (await Applicant.findOne({ applicantFormId: formId }).lean()) ||
-      null;
+  if (!formId) {
+    console.warn(`${tag} Merge aborted — formId is empty`);
+    return { success: false, reason: "formId is required" };
+  }
 
-    const coApplicant =
-      (await CoApplicant.findOne({ formId }).lean()) ||
-      (await CoApplicant.findOne({ coApplicantFormId: formId }).lean()) ||
-      null;
+  try {
+    // ── Step 1: check already merged (fast indexed lookup) ──────────────
+    const tCheck = Date.now();
+    const exists = await Application.findOne({ formId }).select("_id").lean();
+    console.log(`${tag} Duplicate check: ${Date.now() - tCheck}ms`);
 
-    // if your old backend allowed missing coApplicant, keep behavior; otherwise keep this check
-    if (!applicant || !vehicle) {
-      // applicant is required; vehicle exists by iterating VehicleDetails
-      continue;
+    if (exists) {
+      console.log(`${tag} Skipped — already merged (Application _id=${exists._id})`);
+      return { success: false, reason: "already_merged", applicationId: exists._id };
     }
 
-    // === NEW: finalization check (prevent re-creation if already approved/rejected) ===
-    try {
-      // Build OR checks: formId OR any source ids (applicant/coApplicant/vehicle)
-      const orClauses = [{ formId }];
+    // ── Step 2: parallel fetch of all source documents ──────────────────
+    const tFetch = Date.now();
+    const [
+      applicantPrimary,
+      applicantFallback,
+      coApplicantPrimary,
+      coApplicantFallback,
+      vehicle,
+    ] = await Promise.all([
+      Applicant.findOne({ formId }).lean(),
+      Applicant.findOne({ applicantFormId: formId }).lean(),
+      CoApplicant.findOne({ formId }).lean(),
+      CoApplicant.findOne({ coApplicantFormId: formId }).lean(),
+      VehicleDetails.findOne({ formId }).lean(),
+    ]);
+    console.log(`${tag} Source fetch (5 parallel queries): ${Date.now() - tFetch}ms`);
 
-      if (applicant?._id) {
-        orClauses.push(
-          { "applicantSnapshot._id": String(applicant._id) },
-          { applicantId: String(applicant._id) },
-          { "applicant._id": String(applicant._id) }
-        );
-      }
-      if (coApplicant?._id) {
-        orClauses.push(
-          { "coApplicantSnapshot._id": String(coApplicant._id) },
-          { coApplicantId: String(coApplicant._id) },
-          { "coApplicant._id": String(coApplicant._id) }
-        );
-      }
-      if (vehicle?._id) {
-        orClauses.push(
-          { "vehicleSnapshot._id": String(vehicle._id) },
-          { vehicleDetailsId: String(vehicle._id) },
-          { "vehicleDetails._id": String(vehicle._id) }
-        );
-      }
+    const applicant   = applicantPrimary   || applicantFallback   || null;
+    const coApplicant = coApplicantPrimary || coApplicantFallback || null;
 
-      const query = { $or: orClauses };
-
-      const [approved, rejected] = await Promise.all([
-        ApprovedApplication.findOne(query).lean(),
-        RejectedApplication.findOne(query).lean(),
-      ]);
-
-      if (approved) {
-        console.log(` Skipping ${formId} — already approved (${approved._id})`);
-        continue;
-      }
-      if (rejected) {
-        console.log(` Skipping ${formId} — already rejected (${rejected._id})`);
-        continue;
-      }
-    } catch (err) {
-      console.error("Error checking finalized status for", formId, err?.message || err);
-      // proceed — but safer to skip if check fails? we choose to continue and attempt create (optional)
+    if (!applicant) {
+      console.warn(`${tag} Merge aborted — Applicant not found for formId=${formId}`);
+      return { success: false, reason: "applicant_not_found" };
+    }
+    if (!vehicle) {
+      console.warn(`${tag} Merge aborted — VehicleDetails not found for formId=${formId}`);
+      return { success: false, reason: "vehicle_not_found" };
     }
 
+    // ── Step 3: finalization check + initialStage in parallel ───────────
+    const tFinal = Date.now();
+    const finalizationQuery = buildFinalizationQuery(formId, applicant, coApplicant, vehicle);
+
+    const [approved, rejected, initialStageRaw] = await Promise.all([
+      ApprovedApplication.findOne(finalizationQuery).select("_id").lean(),
+      RejectedApplication.findOne(finalizationQuery).select("_id").lean(),
+      getFirstAdminWorkflowStage(),
+    ]);
+    console.log(`${tag} Finalization check + stage lookup (3 parallel queries): ${Date.now() - tFinal}ms`);
+
+    if (approved) {
+      console.log(`${tag} Skipped — already approved (ApprovedApplication _id=${approved._id})`);
+      return { success: false, reason: "already_approved", applicationId: approved._id };
+    }
+    if (rejected) {
+      console.log(`${tag} Skipped — already rejected (RejectedApplication _id=${rejected._id})`);
+      return { success: false, reason: "already_rejected", applicationId: rejected._id };
+    }
+
+    const initialStage = toStage(initialStageRaw);
+
+    // ── Step 4: resolve dealer (optimized: batched User query) ──────────
+    const tDealer = Date.now();
     const resolvedDealer = await resolveDealer({ vehicle, applicant, coApplicant });
     const dealerId = ensureDealerId(resolvedDealer, applicant);
+    console.log(`${tag} Dealer resolution: ${Date.now() - tDealer}ms (dealer=${dealerId ?? "none"})`);
 
     if (!dealerId) {
-      // old backend may have allowed missing dealer; if you want to require dealer, uncomment next line
-      // continue;
-      // keep going (old behavior) — dealer optional
+      // keep old behavior — dealer optional
     }
 
     const dealerSnapshot =
       sanitizeDealer(resolvedDealer) || sanitizeDealer(vehicle?.dealerDetails || {});
 
-    // build + save
+    // ── Step 5: create Application document ─────────────────────────────
+    const tCreate = Date.now();
     const mergedData = {
       formId,
       applicant,
@@ -195,11 +249,84 @@ export const autoMergeApplications = async () => {
       history: [],
     };
 
-    try {
-      await Application.create(mergedData);
-      console.log(` Merged ${formId} (dealer=${dealerId})`);
-    } catch (err) {
-      console.error(` Failed to merge ${formId}:`, err.message || err);
-    }
+    const created = await Application.create(mergedData);
+    console.log(`${tag} Application created: ${Date.now() - tCreate}ms (_id=${created._id})`);
+
+    const totalMs = Date.now() - t0;
+    console.log(`${tag} Merge completed successfully in ${totalMs}ms`);
+    return { success: true, applicationId: created._id, formId, durationMs: totalMs };
+
+  } catch (err) {
+    const totalMs = Date.now() - t0;
+    console.error(`${tag} Merge FAILED after ${totalMs}ms:`, err.message || err);
+    return { success: false, reason: "error", error: err.message || String(err) };
   }
+}
+
+/* ============================================================
+   autoMergeApplications()
+   ============================================================
+   Bulk recovery merge — for startup, manual trigger, or
+   maintenance. NOT the primary merge path.
+
+   Performance improvements over old version:
+     1. Only fetches vehicles with formIds NOT already in
+        applications — avoids scanning already-merged records.
+     2. Delegates all merge logic to mergeSingleApplication()
+        — zero code duplication.
+     3. Logs total duration and per-run summary.
+   ============================================================ */
+export const autoMergeApplications = async () => {
+  const t0 = Date.now();
+  console.log("[autoMerge] Bulk recovery merge started");
+
+  // ── Only retrieve vehicles whose formId is NOT already in applications ──
+  // This avoids the old O(N) full scan + N×findOne duplicate checks.
+  const tScan = Date.now();
+  const mergedFormIds = await Application.distinct("formId");
+  const mergedSet = new Set(mergedFormIds.filter(Boolean));
+
+  const vehicles = await VehicleDetails.find(
+    mergedFormIds.length > 0
+      ? { formId: { $nin: mergedFormIds } }
+      : {}
+  )
+    .select("formId formID applicantFormId applicantFormID form")
+    .lean();
+
+  console.log(
+    `[autoMerge] Scan: ${mergedSet.size} already merged, ${vehicles.length} candidates — ${Date.now() - tScan}ms`
+  );
+
+  if (!vehicles.length) {
+    console.log(`[autoMerge] Nothing to merge. Total: ${Date.now() - t0}ms`);
+    return { merged: 0, skipped: 0, failed: 0 };
+  }
+
+  let merged = 0, skipped = 0, failed = 0;
+
+  for (const vehicle of vehicles) {
+    const formId =
+      vehicle?.formId ||
+      vehicle?.formID ||
+      vehicle?.applicantFormId ||
+      vehicle?.applicantFormID ||
+      vehicle?.form?.formId ||
+      vehicle?.form?.id ||
+      null;
+
+    if (!formId) { skipped++; continue; }
+
+    const result = await mergeSingleApplication(formId);
+
+    if (result.success)                          merged++;
+    else if (result.reason === "error")          failed++;
+    else                                         skipped++;
+  }
+
+  const totalMs = Date.now() - t0;
+  console.log(
+    `[autoMerge] Bulk recovery complete — merged=${merged} skipped=${skipped} failed=${failed} totalMs=${totalMs}`
+  );
+  return { merged, skipped, failed, totalMs };
 };

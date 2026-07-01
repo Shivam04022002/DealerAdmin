@@ -25,7 +25,7 @@ import {
 } from '../controllers/workflowController.js';
 import protect from '../middleware/authMiddleware.js';
 import Application from "../models/Application.js";
-import { autoMergeApplications } from '../services/autoMergeService.js';
+import { autoMergeApplications, mergeSingleApplication } from '../services/autoMergeService.js';
 
 const router = express.Router();
 
@@ -67,11 +67,35 @@ router.post('/applications/:id/comments', protect, addApplicationComment);
 router.post('/fix-dealers', protect, fixDealerForApplications);
 router.post('/normalize-stages', protect, normalizeAllWorkflowStages);
 
-// manual merge trigger (non-blocking, runs in background)
+// POST /api/workflow/merge/:formId
+// Merge a single application by formId — called immediately after dealer submission.
+// Returns synchronously so the caller knows the result.
+router.post('/merge/:formId', async (req, res) => {
+  const { formId } = req.params;
+  if (!formId || !formId.trim()) {
+    return res.status(400).json({ success: false, error: 'formId is required' });
+  }
+  try {
+    const result = await mergeSingleApplication(formId.trim());
+    if (result.success) {
+      return res.status(201).json({ success: true, applicationId: result.applicationId, formId, durationMs: result.durationMs });
+    }
+    // Not an error — already merged / approved / rejected are valid skip reasons
+    const alreadyDone = ['already_merged', 'already_approved', 'already_rejected'].includes(result.reason);
+    return res.status(alreadyDone ? 200 : 422).json({ success: false, reason: result.reason, applicationId: result.applicationId ?? null });
+  } catch (err) {
+    console.error(`[route:merge/${formId}] Unexpected error:`, err.message);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/workflow/merge
+// Bulk recovery merge — manual trigger only (not the primary path).
+// Runs in background; responds immediately.
 router.post('/merge', protect, (req, res) => {
-  res.json({ message: 'Auto-merge triggered in background' });
+  res.json({ message: 'Bulk recovery merge triggered in background' });
   autoMergeApplications()
-    .then(() => console.log('[autoMerge] Manual trigger complete'))
+    .then((summary) => console.log('[autoMerge] Manual trigger complete', summary))
     .catch((err) => console.error('[autoMerge] Manual trigger failed:', err.message));
 });
 

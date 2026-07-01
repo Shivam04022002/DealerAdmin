@@ -9,8 +9,13 @@ import 'bootstrap/dist/css/bootstrap.min.css';
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      staleTime: 30 * 1000,
+      // Individual hooks override staleTime per query type (pending=20s, finalized=60s).
+      // This default applies to any query that doesn't set its own staleTime.
+      staleTime: 20 * 1000,
       gcTime: 5 * 60 * 1000,
+      // useApplications('pending') sets refetchOnWindowFocus:true explicitly.
+      // useApplications('approved'/'rejected') keeps it false.
+      // All other queries default to false here.
       refetchOnWindowFocus: false,
       retry: 1,
     },

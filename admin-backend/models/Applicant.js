@@ -16,4 +16,7 @@ const applicantSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
+applicantSchema.index({ formId: 1 });
+applicantSchema.index({ applicantFormId: 1 }, { sparse: true });
+
 export default mongoose.model("Applicant", applicantSchema, "applicants");
