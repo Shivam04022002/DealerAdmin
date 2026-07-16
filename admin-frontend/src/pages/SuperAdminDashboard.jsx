@@ -27,6 +27,20 @@ const BRAND = {
 
 const PIE_COLORS = [BRAND.orange, BRAND.green, BRAND.red];
 
+// Built-in branch list. Branches created via "+ Add Branch" are loaded from the
+// API and appended to these.
+const DEFAULT_BRANCHES = [
+  "Gonda", "Balrampur", "Ayodhya", "Etawah", "Mainpuri", "Gopiganj",
+  "Machhali Shahar", "Gorakhpur", "Pilibhit", "Bareilly", "Kushinagar",
+  "Jaipur", "Sultanpur", "Auraiya", "Pratapgarh", "Azamgarh", "Kanpur",
+  "Agra/Mathura", "Lucknow (Hussainganj)", "Barabanki (Matiyari)", "Unnao",
+  "Deoria", "Varanasi (Tarna)", "Indore", "Aligarh", "Sitapur",
+  "Raebareilly", "Prayagraj", "Shahjahanpur", "Firozabad", "Lakhimpur",
+];
+
+// Sentinel value for the "+ Add Branch" option in the branch dropdown
+const ADD_BRANCH_OPTION = "__add_branch__";
+
 const iconClock = (
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
@@ -589,15 +603,39 @@ const SuperAdminDashboard = () => {
     mobileNumber: "",
   });
 
-  // Branch dropdown options
-  const branchOptions = [
-    "Gonda", "Balrampur", "Ayodhya", "Etawah", "Mainpuri", "Gopiganj",
-    "Machhali Shahar", "Gorakhpur", "Pilibhit", "Bareilly", "Kushinagar",
-    "Jaipur", "Sultanpur", "Auraiya", "Pratapgarh", "Azamgarh", "Kanpur",
-    "Agra/Mathura", "Lucknow (Hussainganj)", "Barabanki (Matiyari)", "Unnao",
-    "Deoria", "Varanasi (Tarna)", "Indore", "Aligarh", "Sitapur",
-    "Raebareilly", "Prayagraj", "Shahjahanpur", "Firozabad", "Lakhimpur",
-  ];
+  // Branches added through the "+ Add Branch" popup (loaded from the API)
+  const [dbBranches, setDbBranches] = useState([]);
+
+  // Branch dropdown options — the built-in list plus any branch added via the API.
+  // The built-in list stays first so the dropdown is unchanged even if the API is
+  // unavailable or the branches collection is empty.
+  const branchOptions = useMemo(() => {
+    const seen = new Set(DEFAULT_BRANCHES.map((b) => b.toLowerCase()));
+    const extra = dbBranches.filter((b) => b && !seen.has(b.toLowerCase()));
+    return [...DEFAULT_BRANCHES, ...extra];
+  }, [dbBranches]);
+
+  // Add Branch popup state
+  const [showAddBranch, setShowAddBranch] = useState(false);
+  const [newBranchName, setNewBranchName] = useState("");
+  const [branchError, setBranchError] = useState("");
+  const [savingBranch, setSavingBranch] = useState(false);
+  const savingBranchRef = useRef(false); // synchronous in-flight guard (blocks double-submit before re-render)
+  const branchInputRef = useRef(null);
+  const branchSelectRef = useRef(null); // dropdown to return focus to on close
+  const branchModalRef = useRef(null);  // modal container for focus trapping
+
+  // Lightweight in-app toast (no extra dependency, matches app theme)
+  const [toast, setToast] = useState(null); // { type: "success" | "error", message }
+  const toastTimerRef = useRef(null);
+  const showToast = useCallback((message, type = "success") => {
+    setToast({ message, type });
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToast(null), 3000);
+  }, []);
+  useEffect(() => () => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+  }, []);
 
   // Search states
   const [filesSearch, setFilesSearch] = useState("");
@@ -842,6 +880,22 @@ const SuperAdminDashboard = () => {
     }
   }, []);
 
+  // Load branches created through "+ Add Branch". A failure here is non-fatal —
+  // the dropdown falls back to DEFAULT_BRANCHES.
+  const fetchBranches = React.useCallback(async () => {
+    try {
+      const { data } = await API.get("/branches", { headers: authHeaders() });
+      const names = Array.isArray(data?.branches)
+        ? data.branches.map((b) => b?.name).filter(Boolean)
+        : [];
+      setDbBranches(names);
+      return names;
+    } catch (err) {
+      console.error("Failed to load branches", err?.response?.data || err.message);
+      return [];
+    }
+  }, []);
+
   const fetchDealerActivity = React.useCallback(async (search = "", status = "all") => {
     try {
       setLoadingDealerActivity(true);
@@ -931,8 +985,9 @@ const SuperAdminDashboard = () => {
   useEffect(() => {
     if (tab === "dealers") {
       fetchDealers();
+      fetchBranches();
     }
-  }, [tab, fetchDealers]);
+  }, [tab, fetchDealers, fetchBranches]);
 
   // Update edit dealer form when editingDealer changes
   useEffect(() => {
@@ -1159,6 +1214,106 @@ const SuperAdminDashboard = () => {
       alert(err?.response?.data?.message || err.message || "Failed to create dealer");
     } finally {
       setBusy(false);
+    }
+  };
+
+  // ===== Add Branch popup handlers =====
+  const openAddBranch = () => {
+    setNewBranchName("");
+    setBranchError("");
+    setShowAddBranch(true);
+  };
+
+  const closeAddBranch = () => {
+    setShowAddBranch(false);
+    setNewBranchName("");
+    setBranchError("");
+    // Return keyboard focus to the Branch dropdown after the modal unmounts
+    setTimeout(() => branchSelectRef.current?.focus(), 0);
+  };
+
+  // When the Add Branch popup opens: focus the input, enable Escape-to-close,
+  // and trap keyboard focus inside the modal.
+  useEffect(() => {
+    if (!showAddBranch) return;
+    // Focus the branch name input once the modal has mounted
+    const focusTimer = setTimeout(() => branchInputRef.current?.focus(), 0);
+    const onKeyDown = (e) => {
+      if (e.key === "Escape") {
+        closeAddBranch();
+        return;
+      }
+      if (e.key === "Tab") {
+        // Keep Tab focus cycling within the modal's enabled controls
+        const focusable = branchModalRef.current?.querySelectorAll(
+          "input, button, select, textarea, a[href]"
+        );
+        const list = focusable
+          ? Array.from(focusable).filter((el) => !el.disabled && el.tabIndex !== -1)
+          : [];
+        if (list.length === 0) return;
+        const first = list[0];
+        const last = list[list.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      clearTimeout(focusTimer);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [showAddBranch]);
+
+  const submitNewBranch = async (e) => {
+    e.preventDefault();
+    // Guard against repeated clicks / Enter presses while a request is in flight.
+    // The ref updates synchronously, closing the race window before the button
+    // is re-rendered as disabled.
+    if (savingBranchRef.current) return;
+
+    // Normalize: trim ends and collapse internal whitespace to single spaces
+    // e.g. "  Lucknow    Main   " -> "Lucknow Main"
+    const name = newBranchName.trim().replace(/\s+/g, " ");
+
+    if (!name) {
+      setBranchError("Branch Name is required.");
+      return;
+    }
+    if (branchOptions.some((b) => b.toLowerCase() === name.toLowerCase())) {
+      setBranchError("Branch already exists.");
+      return;
+    }
+
+    savingBranchRef.current = true;
+    setSavingBranch(true);
+    setBranchError("");
+    try {
+      const { data } = await API.post(
+        "/branches",
+        { name },
+        { headers: authHeaders() }
+      );
+      const created = data?.branch?.name || name;
+      await fetchBranches();
+      setDealerForm((prev) => ({ ...prev, Branch: created }));
+      closeAddBranch();
+      showToast("Branch added successfully.", "success");
+    } catch (err) {
+      // Keep the popup open and the input intact so the user can retry.
+      // Show the API error inline in the modal and via a toast.
+      const msg =
+        err?.response?.data?.message || err.message || "Failed to add branch";
+      setBranchError(msg);
+      showToast(msg, "error");
+    } finally {
+      savingBranchRef.current = false;
+      setSavingBranch(false);
     }
   };
 
@@ -2426,13 +2581,22 @@ table th {
                 />
                 <select
                   className="input"
+                  ref={branchSelectRef}
                   value={dealerForm.Branch}
-                  onChange={(e) => setDealerForm({ ...dealerForm, Branch: e.target.value })}
+                  onChange={(e) => {
+                    // "+ Add Branch" opens the popup instead of selecting a value
+                    if (e.target.value === ADD_BRANCH_OPTION) {
+                      openAddBranch();
+                      return;
+                    }
+                    setDealerForm({ ...dealerForm, Branch: e.target.value });
+                  }}
                 >
                   <option value="">Select Branch</option>
                   {branchOptions.map((b) => (
                     <option key={b} value={b}>{b}</option>
                   ))}
+                  <option value={ADD_BRANCH_OPTION}>+ Add Branch</option>
                 </select>
                 <input
                   className="input"
@@ -2446,6 +2610,91 @@ table th {
                   </button>
                 </div>
               </form>
+            )}
+
+            {/* Add Branch Modal */}
+            {showAddBranch && (
+              <div
+                className="modal-overlay"
+                onClick={(e) => {
+                  if (e.target.classList.contains("modal-overlay")) closeAddBranch();
+                }}
+              >
+                <div
+                  className="modal-content"
+                  style={{ maxWidth: 420 }}
+                  ref={branchModalRef}
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="add-branch-title"
+                >
+                  <h2 id="add-branch-title" style={{ margin: "0 0 16px", color: "#111827", fontSize: 20 }}>
+                    Add New Branch
+                  </h2>
+                  <form onSubmit={submitNewBranch}>
+                    <label
+                      style={{ display: "block", fontWeight: 700, fontSize: 13, color: "#374151", marginBottom: 6 }}
+                    >
+                      Branch Name <span style={{ color: "#EF4444" }}>*</span>
+                    </label>
+                    <input
+                      className="input"
+                      ref={branchInputRef}
+                      aria-label="Branch Name"
+                      value={newBranchName}
+                      onChange={(e) => {
+                        setNewBranchName(e.target.value);
+                        if (branchError) setBranchError("");
+                      }}
+                      placeholder="Enter branch name"
+                    />
+                    {branchError && (
+                      <div style={{ color: "#EF4444", fontSize: 13, marginTop: 8 }}>
+                        {branchError}
+                      </div>
+                    )}
+                    <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 20 }}>
+                      <button
+                        type="button"
+                        className="btn btn-outline"
+                        onClick={closeAddBranch}
+                        disabled={savingBranch}
+                      >
+                        Cancel
+                      </button>
+                      <button type="submit" className="btn btn-primary" disabled={savingBranch}>
+                        {savingBranch ? "Adding…" : "Add"}
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            )}
+
+            {/* Toast notification */}
+            {toast && (
+              <div
+                role="status"
+                aria-live="polite"
+                style={{
+                  position: "fixed",
+                  bottom: 24,
+                  right: 24,
+                  zIndex: 11000,
+                  minWidth: 240,
+                  maxWidth: 360,
+                  padding: "12px 16px",
+                  borderRadius: 10,
+                  color: "#fff",
+                  fontWeight: 700,
+                  fontSize: 14,
+                  boxShadow: "0 10px 30px rgba(0,0,0,0.25)",
+                  background: toast.type === "error" ? "#EF4444" : "#16A34A",
+                }}
+                onClick={() => setToast(null)}
+              >
+                {toast.message}
+              </div>
             )}
 
             {/* Bulk Create Form */}

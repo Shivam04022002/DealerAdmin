@@ -9,6 +9,7 @@ import vehicleRoutes from './routes/vehicleRoutes.js';
 import authRoutes from "./routes/authRoutes.js";
 import superadminRoutes from "./routes/superadminRoutes.js";
 import formTrackingRoutes from "./routes/formTrackingRoutes.js";
+import branchRoutes from "./routes/branchRoutes.js";
 import { autoMergeApplications } from "./services/autoMergeService.js";
 // import mergeRoutes from './routes/mergeRoutes.js';
 
@@ -89,6 +90,7 @@ app.use('/api/vehicles', vehicleRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/superadmin", superadminRoutes);
 app.use("/api/form-tracking", formTrackingRoutes);
+app.use("/api/branches", branchRoutes);
 // app.use('/api/merge', mergeRoutes);
 
 // 404 handler
