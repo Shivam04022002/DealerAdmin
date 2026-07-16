@@ -1,5 +1,0 @@
-C:\Users\anura\Downloads\demo1\admin\admin-backend\controllers\vehicleController.js
-C:\Users\anura\Downloads\demo1\admin\admin-backend\models\VehicleDetails.js
-C:\Users\anura\Downloads\demo1\admin\admin-backend\routes\vehicleRoutes.js
-C:\Users\anura\Downloads\demo1\native-app\backend\server\controllers\vehiclecontroller.js
-C:\Users\anura\Downloads\demo1\native-app\backend\server\models\VehicleDetails.js
