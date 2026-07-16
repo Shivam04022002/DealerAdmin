@@ -59,20 +59,22 @@ app.set('trust proxy', 1);
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 
-// Query timing + response-size middleware
-app.use((req, res, next) => {
-    const t0 = Date.now();
-    const originalJson = res.json.bind(res);
-    res.json = (body) => {
-        const ms = Date.now() - t0;
-        const bytes = Buffer.byteLength(JSON.stringify(body), 'utf8');
-        if (ms > 200 || bytes > 50000) {
-            console.log(`[API] ${req.method} ${req.path} → ${ms}ms  ${(bytes / 1024).toFixed(1)}KB`);
-        }
-        return originalJson(body);
-    };
-    next();
-});
+// Query timing + response-size middleware (development only — perf diagnostics)
+if (process.env.NODE_ENV !== 'production') {
+    app.use((req, res, next) => {
+        const t0 = Date.now();
+        const originalJson = res.json.bind(res);
+        res.json = (body) => {
+            const ms = Date.now() - t0;
+            const bytes = Buffer.byteLength(JSON.stringify(body), 'utf8');
+            if (ms > 200 || bytes > 50000) {
+                console.log(`[API] ${req.method} ${req.path} → ${ms}ms  ${(bytes / 1024).toFixed(1)}KB`);
+            }
+            return originalJson(body);
+        };
+        next();
+    });
+}
 
 // Health check endpoint (for monitoring)
 app.get('/api/health', (req, res) => {

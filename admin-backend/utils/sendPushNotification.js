@@ -56,7 +56,9 @@ export const sendPushNotification = async (userId, title, body, type, formId = "
     for (const chunk of chunks) {
       try {
         const ticketChunk = await expo.sendPushNotificationsAsync(chunk);
-        console.log("✅ Push notification sent:", ticketChunk);
+        if (process.env.NODE_ENV !== "production") {
+          console.log("✅ Push notification sent:", ticketChunk);
+        }
       } catch (error) {
         console.error("❌ Error sending push notification chunk:", error);
       }

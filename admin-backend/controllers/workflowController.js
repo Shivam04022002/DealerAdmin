@@ -178,7 +178,9 @@ export const getPendingApplications = async (req, res) => {
       Application.countDocuments(filter),
     ]);
 
-    console.log(`[PERF] getPendingApplications: page=${page} limit=${limit} total=${total} returned=${applications.length} in ${Date.now() - t0}ms`);
+    if (process.env.NODE_ENV !== "production") {
+      console.log(`[PERF] getPendingApplications: page=${page} limit=${limit} total=${total} returned=${applications.length} in ${Date.now() - t0}ms`);
+    }
     return res.json({
       items: applications,
       page,
@@ -577,7 +579,9 @@ export const getApprovedApplications = async (req, res) => {
       ApprovedApplication.countDocuments(filter),
     ]);
 
-    console.log(`[PERF] getApprovedApplications: page=${page} limit=${limit} total=${total} returned=${approvedApps.length} in ${Date.now() - t0}ms`);
+    if (process.env.NODE_ENV !== "production") {
+      console.log(`[PERF] getApprovedApplications: page=${page} limit=${limit} total=${total} returned=${approvedApps.length} in ${Date.now() - t0}ms`);
+    }
     res.json({
       items: approvedApps,
       page,
@@ -647,7 +651,9 @@ export const getRejectedApplications = async (req, res) => {
       RejectedApplication.countDocuments(filter),
     ]);
 
-    console.log(`[PERF] getRejectedApplications: page=${page} limit=${limit} total=${total} returned=${items.length} in ${Date.now() - t0}ms`);
+    if (process.env.NODE_ENV !== "production") {
+      console.log(`[PERF] getRejectedApplications: page=${page} limit=${limit} total=${total} returned=${items.length} in ${Date.now() - t0}ms`);
+    }
     res.json({
       items,
       page,

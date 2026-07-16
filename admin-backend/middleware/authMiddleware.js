@@ -61,16 +61,18 @@ const protect = async (req, res, next) => {
         console.warn(" [auth] Could not normalize role:", normErr?.message || normErr);
       }
 
-      // Log workflows preview if present (don't print sensitive fields)
-      if (req.admin?.workflows) {
-        try {
-          const preview = JSON.stringify(req.admin.workflows).slice(0, 300);
-          // console.log(" [auth] admin.workflows type:", typeof req.admin.workflows, "preview:", preview);
-        } catch (e) {
-          console.log(" [auth] admin.workflows present (could not stringify preview)");
+      // Workflows preview for debugging (dev only — don't print sensitive fields)
+      if (process.env.NODE_ENV !== "production") {
+        if (req.admin?.workflows) {
+          try {
+            const preview = JSON.stringify(req.admin.workflows).slice(0, 300);
+            console.log(" [auth] admin.workflows type:", typeof req.admin.workflows, "preview:", preview);
+          } catch (e) {
+            console.log(" [auth] admin.workflows present (could not stringify preview)");
+          }
+        } else {
+          console.log(" [auth] admin.workflows absent on req.admin");
         }
-      } else {
-        console.log(" [auth] admin.workflows absent on req.admin");
       }
 
       return next();

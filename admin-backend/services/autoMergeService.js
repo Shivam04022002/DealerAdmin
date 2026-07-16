@@ -15,6 +15,13 @@ import { toStage, normalizeWorkflows, WORKFLOW_STAGES } from "../utils/workflowC
 /* ---------- helpers ---------- */
 const DEFAULT_START_STAGE = WORKFLOW_STAGES[0];
 
+// Debug/timing logs — silenced in production to keep PM2 logs readable.
+// NODE_ENV is read at call time, not module load: this module is imported
+// before dotenv.config() runs in server.js.
+const debugLog = (...args) => {
+  if (process.env.NODE_ENV !== "production") console.log(...args);
+};
+
 function asPlain(doc) {
   return doc?.toObject ? doc.toObject() : doc;
 }
@@ -153,7 +160,7 @@ export async function mergeSingleApplication(formId) {
   const t0 = Date.now();
   const tag = `[merge:${formId}]`;
 
-  console.log(`${tag} Merge started`);
+  debugLog(`${tag} Merge started`);
 
   if (!formId) {
     console.warn(`${tag} Merge aborted — formId is empty`);
@@ -164,10 +171,10 @@ export async function mergeSingleApplication(formId) {
     // ── Step 1: check already merged (fast indexed lookup) ──────────────
     const tCheck = Date.now();
     const exists = await Application.findOne({ formId }).select("_id").lean();
-    console.log(`${tag} Duplicate check: ${Date.now() - tCheck}ms`);
+    debugLog(`${tag} Duplicate check: ${Date.now() - tCheck}ms`);
 
     if (exists) {
-      console.log(`${tag} Skipped — already merged (Application _id=${exists._id})`);
+      debugLog(`${tag} Skipped — already merged (Application _id=${exists._id})`);
       return { success: false, reason: "already_merged", applicationId: exists._id };
     }
 
@@ -186,7 +193,7 @@ export async function mergeSingleApplication(formId) {
       CoApplicant.findOne({ coApplicantFormId: formId }).lean(),
       VehicleDetails.findOne({ formId }).lean(),
     ]);
-    console.log(`${tag} Source fetch (5 parallel queries): ${Date.now() - tFetch}ms`);
+    debugLog(`${tag} Source fetch (5 parallel queries): ${Date.now() - tFetch}ms`);
 
     const applicant   = applicantPrimary   || applicantFallback   || null;
     const coApplicant = coApplicantPrimary || coApplicantFallback || null;
@@ -209,14 +216,14 @@ export async function mergeSingleApplication(formId) {
       RejectedApplication.findOne(finalizationQuery).select("_id").lean(),
       getFirstAdminWorkflowStage(),
     ]);
-    console.log(`${tag} Finalization check + stage lookup (3 parallel queries): ${Date.now() - tFinal}ms`);
+    debugLog(`${tag} Finalization check + stage lookup (3 parallel queries): ${Date.now() - tFinal}ms`);
 
     if (approved) {
-      console.log(`${tag} Skipped — already approved (ApprovedApplication _id=${approved._id})`);
+      debugLog(`${tag} Skipped — already approved (ApprovedApplication _id=${approved._id})`);
       return { success: false, reason: "already_approved", applicationId: approved._id };
     }
     if (rejected) {
-      console.log(`${tag} Skipped — already rejected (RejectedApplication _id=${rejected._id})`);
+      debugLog(`${tag} Skipped — already rejected (RejectedApplication _id=${rejected._id})`);
       return { success: false, reason: "already_rejected", applicationId: rejected._id };
     }
 
@@ -226,7 +233,7 @@ export async function mergeSingleApplication(formId) {
     const tDealer = Date.now();
     const resolvedDealer = await resolveDealer({ vehicle, applicant, coApplicant });
     const dealerId = ensureDealerId(resolvedDealer, applicant);
-    console.log(`${tag} Dealer resolution: ${Date.now() - tDealer}ms (dealer=${dealerId ?? "none"})`);
+    debugLog(`${tag} Dealer resolution: ${Date.now() - tDealer}ms (dealer=${dealerId ?? "none"})`);
 
     if (!dealerId) {
       // keep old behavior — dealer optional
@@ -250,10 +257,10 @@ export async function mergeSingleApplication(formId) {
     };
 
     const created = await Application.create(mergedData);
-    console.log(`${tag} Application created: ${Date.now() - tCreate}ms (_id=${created._id})`);
+    debugLog(`${tag} Application created: ${Date.now() - tCreate}ms (_id=${created._id})`);
 
     const totalMs = Date.now() - t0;
-    console.log(`${tag} Merge completed successfully in ${totalMs}ms`);
+    debugLog(`${tag} Merge completed successfully in ${totalMs}ms`);
     return { success: true, applicationId: created._id, formId, durationMs: totalMs };
 
   } catch (err) {
@@ -278,7 +285,7 @@ export async function mergeSingleApplication(formId) {
    ============================================================ */
 export const autoMergeApplications = async () => {
   const t0 = Date.now();
-  console.log("[autoMerge] Bulk recovery merge started");
+  debugLog("[autoMerge] Bulk recovery merge started");
 
   // ── Only retrieve vehicles whose formId is NOT already in applications ──
   // This avoids the old O(N) full scan + N×findOne duplicate checks.
@@ -294,12 +301,12 @@ export const autoMergeApplications = async () => {
     .select("formId formID applicantFormId applicantFormID form")
     .lean();
 
-  console.log(
+  debugLog(
     `[autoMerge] Scan: ${mergedSet.size} already merged, ${vehicles.length} candidates — ${Date.now() - tScan}ms`
   );
 
   if (!vehicles.length) {
-    console.log(`[autoMerge] Nothing to merge. Total: ${Date.now() - t0}ms`);
+    debugLog(`[autoMerge] Nothing to merge. Total: ${Date.now() - t0}ms`);
     return { merged: 0, skipped: 0, failed: 0 };
   }
 
@@ -325,8 +332,11 @@ export const autoMergeApplications = async () => {
   }
 
   const totalMs = Date.now() - t0;
-  console.log(
-    `[autoMerge] Bulk recovery complete — merged=${merged} skipped=${skipped} failed=${failed} totalMs=${totalMs}`
-  );
+  const summary = `[autoMerge] Bulk recovery complete — merged=${merged} skipped=${skipped} failed=${failed} totalMs=${totalMs}`;
+
+  // Real merge activity is worth surfacing in production; idle sweeps are not.
+  if (merged > 0 || failed > 0) console.log(summary);
+  else debugLog(summary);
+
   return { merged, skipped, failed, totalMs };
 };
