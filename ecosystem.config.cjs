@@ -25,7 +25,10 @@ module.exports = {
       env_production: {
         NODE_ENV: 'production',
         PORT: 5001,
-        CORS_ORIGIN: 'https://dealer.surjitfinance.com'
+        // The admin SPA is served from the dealeradmin host and calls /api/ on
+        // that same host; browsers send Origin on same-origin POSTs, so it must
+        // be listed here or logins are rejected.
+        CORS_ORIGIN: 'https://dealeradmin.surjitfinance.com,https://dealer.surjitfinance.com'
       },
       error_file: '/var/www/logs/admin-backend-error.log',
       out_file:   '/var/www/logs/admin-backend-out.log',

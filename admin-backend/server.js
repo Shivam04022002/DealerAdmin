@@ -15,26 +15,61 @@ import { autoMergeApplications } from "./services/autoMergeService.js";
 
 dotenv.config();
 
-// CORS Configuration - supports multiple origins (comma-separated in .env)
+// CORS Configuration
+// Nginx serves the admin SPA from /var/www/dealeradmin on the dealeradmin host
+// and proxies /api/ on that same host to this backend. Browsers send an Origin
+// header on same-origin POSTs, so the host the SPA is served from must be
+// whitelisted or every write (login, branch create) is rejected.
+const PRODUCTION_ORIGINS = [
+    'https://dealeradmin.surjitfinance.com', // admin SPA + API (same host via nginx)
+    'https://dealer.surjitfinance.com',      // admin SPA alias
+];
+
+const DEVELOPMENT_ORIGINS = [
+    'http://localhost:5173',  // vite dev
+    'http://127.0.0.1:5173',
+    'http://localhost:4173',  // vite preview
+    'http://127.0.0.1:4173',
+];
+
+// Compare origins without a trailing slash; browsers never send one, but
+// hand-configured CORS_ORIGIN values often do.
+const stripTrailingSlash = (value) => value.trim().replace(/\/+$/, '');
+
 const getAllowedOrigins = () => {
-    if (process.env.NODE_ENV !== 'production') {
-        return '*'; // Allow all in development
-    }
-    const origins = process.env.CORS_ORIGIN || 'https://dealer.surjitfinance.com';
-    return origins.split(',').map(origin => origin.trim());
+    const fromEnv = (process.env.CORS_ORIGIN || '')
+        .split(',')
+        .map(stripTrailingSlash)
+        .filter(Boolean);
+
+    const defaults = process.env.NODE_ENV === 'production'
+        ? PRODUCTION_ORIGINS
+        : DEVELOPMENT_ORIGINS;
+
+    // Union: CORS_ORIGIN can add origins but can never silently drop the ones
+    // this application is actually served from.
+    return [...new Set([...defaults, ...fromEnv])];
 };
+
+class CorsError extends Error {
+    constructor(origin) {
+        super('Origin is not allowed.');
+        this.name = 'CorsError';
+        this.status = 403;
+        this.origin = origin;
+    }
+}
 
 const corsOptions = {
     origin: (origin, callback) => {
-        const allowedOrigins = getAllowedOrigins();
-        // Allow requests with no origin (like mobile apps or curl)
+        // No Origin header: curl, health checks, server-to-server, same-origin GET.
+        // CORS only constrains browsers, so this is not a bypass.
         if (!origin) return callback(null, true);
 
-        if (allowedOrigins === '*' || allowedOrigins.includes(origin)) {
-            callback(null, true);
-        } else {
-            callback(new Error('Not allowed by CORS'));
+        if (getAllowedOrigins().includes(stripTrailingSlash(origin))) {
+            return callback(null, true);
         }
+        return callback(new CorsError(origin));
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
@@ -102,6 +137,23 @@ app.use((req, res) => {
 
 // Global error handler
 app.use((err, req, res, next) => {
+    // Rejected CORS origins are a client/config problem, not a server fault:
+    // answer 403 rather than 500, and log enough to diagnose it (never headers,
+    // tokens or bodies).
+    if (err instanceof CorsError) {
+        console.warn(
+            `[CORS] Rejected request\n` +
+            `  Incoming Origin: ${err.origin}\n` +
+            `  Requested URL:   ${req.originalUrl}\n` +
+            `  HTTP Method:     ${req.method}\n` +
+            `  Reason:          Origin not in allowed list [${getAllowedOrigins().join(', ')}]`
+        );
+        return res.status(403).json({
+            success: false,
+            message: 'Origin is not allowed.'
+        });
+    }
+
     console.error('Error:', err.message);
     res.status(err.status || 500).json({
         error: process.env.NODE_ENV === 'production'
