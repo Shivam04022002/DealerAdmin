@@ -462,6 +462,13 @@ export const approveApplication = async (req, res) => {
       // mirrors it onto updatedAt and ignores an explicit updatedAt on a normal
       // save; save({ timestamps: false }) lets us set both deterministically.
       const approvedDoc = new ApprovedApplication({
+        // Preserve the original identity. ActivityLog.applicationId and
+        // ApplicationHistory.applicationId store the source Application._id;
+        // reusing it here keeps those references joinable (the admin activity
+        // feed joins logs to applications by _id) and matches the reject flow,
+        // which already keeps the original _id. Separate collection, so no key
+        // collision. The findOne({ formId }) guard above prevents re-approval.
+        _id: app._id,
         formId: app.formId,
         applicant: app.applicant,
         coApplicant: app.coApplicant,
