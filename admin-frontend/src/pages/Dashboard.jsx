@@ -487,7 +487,9 @@ const Dashboard = () => {
         "Stage":         getStage(a),
         "Status":        tab,
         "Created Date":  fmtDate(a?.createdAt),
-        "Last Updated":  fmtDate(a?.updatedAt),
+        // rejected -> rejection.rejectedAt (updatedAt is unreliable for historical
+        // rejected records); approved/pending -> updatedAt.
+        "Last Updated":  fmtDate(tab === "rejected" ? (a?.rejection?.rejectedAt || a?.updatedAt) : a?.updatedAt),
       })));
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, tab.charAt(0).toUpperCase() + tab.slice(1));

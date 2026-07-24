@@ -269,8 +269,9 @@ export const getFilesByType = async (req, res) => {
 
       case "approved": {
         const filter = await buildFinalizedFilter(req.admin);
+        // updatedAt is the approval time; there is no separate approvedAt field.
         applications = await ApprovedApplication.find(filter)
-          .select("formId applicant coApplicant vehicleDetails dealer dealerDetails status workflowStage approvedAt createdAt updatedAt")
+          .select("formId applicant coApplicant vehicleDetails dealer dealerDetails status workflowStage createdAt updatedAt")
           .populate("dealer", "email userId name district branch")
           .lean();
         break;
@@ -278,8 +279,13 @@ export const getFilesByType = async (req, res) => {
 
       case "rejected": {
         const filter = await buildFinalizedFilter(req.admin);
+        // The rejection timestamp/reason live under the nested `rejection`
+        // object (rejection.rejectedAt / rejection.reason) — the previous select
+        // named non-existent top-level rejectedAt/reason, so neither reached the
+        // client. updatedAt is unreliable here (historical records left it equal
+        // to the submission date), so the export must read rejection.rejectedAt.
         applications = await RejectedApplication.find(filter)
-          .select("formId applicant coApplicant vehicleDetails dealer dealerDetails status workflowStage rejectedAt reason createdAt updatedAt")
+          .select("formId applicant coApplicant vehicleDetails dealer dealerDetails status workflowStage rejection createdAt updatedAt")
           .populate("dealer", "email userId name district branch")
           .lean();
         break;

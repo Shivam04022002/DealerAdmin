@@ -53,6 +53,16 @@ const getVehicle = (app) =>
   app?.applicant?.vehicle ||
   "—";
 
+// "Updated Date" business rule:
+//   pending  -> last update            (updatedAt)
+//   approved -> approval time          (updatedAt is stamped at approval)
+//   rejected -> rejection time         (rejection.rejectedAt — updatedAt is
+//               unreliable: historical records left it equal to createdAt)
+const getUpdatedTs = (app, status) =>
+  status === "rejected"
+    ? (app?.rejection?.rejectedAt || app?.updatedAt)
+    : app?.updatedAt;
+
 const buildRows = (applications, status) =>
   applications.map((app) => ({
     "Application ID": app?.formId || app?._id || "—",
@@ -64,7 +74,7 @@ const buildRows = (applications, status) =>
     Status: status.charAt(0).toUpperCase() + status.slice(1),
     // Server-generated createdAt — the same value shown in the table's Created column.
     "Created Date": formatDate(app?.createdAt),
-    "Updated Date": formatDate(app?.updatedAt),
+    "Updated Date": formatDate(getUpdatedTs(app, status)),
   }));
 
 const COL_WIDTHS = [
