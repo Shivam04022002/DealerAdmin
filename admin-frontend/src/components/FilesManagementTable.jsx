@@ -35,6 +35,15 @@ const getDealerBranch = (app) =>
 const getDealerDistrict = (app) =>
   app?.dealerDetails?.district || app?.dealerDetails?.District || app?.dealer?.district || "—";
 const getStage = (app) => app?.workflowStage || "—";
+// Original dealer submission date. The record createdAt is re-stamped at approval,
+// so read the submission timestamp preserved on the embedded applicant sub-document
+// (canonical), then vehicle-details, then the record createdAt (pending/fixed records).
+const getCreatedTs = (app) =>
+  app?.applicant?.createdAt ||
+  app?.applicant?.applicant?.createdAt ||
+  app?.vehicleDetails?.createdAt ||
+  app?.createdAt ||
+  "";
 const fmtDate = (v) => {
   if (!v) return "—";
   try { return new Date(v).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }); }
@@ -260,7 +269,7 @@ export default function FilesManagementTable({
     {
       id: "createdAt",
       header: "Created",
-      accessorFn: (row) => row?.createdAt || "",
+      accessorFn: (row) => getCreatedTs(row),
       sortingFn: "datetime",
       size: 110,
       cell: (info) => (

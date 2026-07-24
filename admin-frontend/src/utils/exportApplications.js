@@ -53,6 +53,18 @@ const getVehicle = (app) =>
   app?.applicant?.vehicle ||
   "—";
 
+// "Created Date" = the dealer's ORIGINAL submission date.
+// The record's own createdAt is unreliable for approved records — it was
+// re-stamped at approval time. The true submission timestamp is preserved on
+// the embedded applicant sub-document (canonical) and corroborated by the
+// vehicle-details submission. Fall back to the record createdAt last (correct
+// for pending and for records fixed after the createdAt-preservation change).
+const getCreatedTs = (app) =>
+  app?.applicant?.createdAt ||
+  app?.applicant?.applicant?.createdAt ||
+  app?.vehicleDetails?.createdAt ||
+  app?.createdAt;
+
 // "Updated Date" business rule:
 //   pending  -> last update            (updatedAt)
 //   approved -> approval time          (updatedAt is stamped at approval)
@@ -72,8 +84,9 @@ const buildRows = (applications, status) =>
     "Mobile Number": getMobile(app),
     "Vehicle Name": getVehicle(app),
     Status: status.charAt(0).toUpperCase() + status.slice(1),
-    // Server-generated createdAt — the same value shown in the table's Created column.
-    "Created Date": formatDate(app?.createdAt),
+    // Original dealer submission date (see getCreatedTs) — the same value the
+    // table's Created column shows.
+    "Created Date": formatDate(getCreatedTs(app)),
     "Updated Date": formatDate(getUpdatedTs(app, status)),
   }));
 

@@ -23,6 +23,15 @@ const getDealerName    = (app) => app?.dealerDetails?.name || app?.dealer?.name 
 const getDealerBranch  = (app) => app?.dealerDetails?.branch || app?.dealerDetails?.Branch || app?.dealer?.branch || "—";
 const getDealerDistrict= (app) => app?.dealerDetails?.district || app?.dealerDetails?.District || app?.dealer?.district || "—";
 const getStage         = (app) => app?.workflowStage || "—";
+// Original dealer submission date. Record createdAt is re-stamped at approval, so
+// prefer the submission timestamp on the embedded applicant sub-document (canonical),
+// then vehicle-details, then record createdAt (pending / fixed records).
+const getCreatedTs = (app) =>
+  app?.applicant?.createdAt ||
+  app?.applicant?.applicant?.createdAt ||
+  app?.vehicleDetails?.createdAt ||
+  app?.createdAt ||
+  "";
 const fmtDate = (v) => {
   if (!v) return "—";
   try { return new Date(v).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }); }
@@ -486,7 +495,7 @@ const Dashboard = () => {
         "District":      getDealerDistrict(a),
         "Stage":         getStage(a),
         "Status":        tab,
-        "Created Date":  fmtDate(a?.createdAt),
+        "Created Date":  fmtDate(getCreatedTs(a)),
         // rejected -> rejection.rejectedAt (updatedAt is unreliable for historical
         // rejected records); approved/pending -> updatedAt.
         "Last Updated":  fmtDate(tab === "rejected" ? (a?.rejection?.rejectedAt || a?.updatedAt) : a?.updatedAt),
@@ -548,7 +557,7 @@ const Dashboard = () => {
     },
     {
       id: "createdAt", header: "Created Date",
-      accessorFn: (row) => row?.createdAt || "",
+      accessorFn: (row) => getCreatedTs(row),
       sortingFn: "datetime", size: 120,
       cell: (info) => <span style={{ fontSize: 12, color: "#6B7280" }}>{fmtDate(info.getValue())}</span>,
     },
