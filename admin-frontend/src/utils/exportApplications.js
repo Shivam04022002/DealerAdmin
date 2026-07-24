@@ -31,6 +31,14 @@ const getApplicantName = (app) =>
 const getDealerName = (app) =>
   app?.dealerDetails?.name || app?.dealer?.name || "—";
 
+const getBranch = (app) =>
+  app?.branchName ||
+  app?.dealerDetails?.branch ||
+  app?.dealerDetails?.Branch ||
+  app?.dealer?.Branch ||
+  app?.dealer?.branch ||
+  "—";
+
 const getMobile = (app) =>
   app?.applicant?.applicant?.mobileNumber ||
   app?.applicant?.mobileNumber ||
@@ -49,23 +57,26 @@ const buildRows = (applications, status) =>
   applications.map((app) => ({
     "Application ID": app?.formId || app?._id || "—",
     "Applicant Name": getApplicantName(app),
+    Branch: getBranch(app),
     "Dealer Name": getDealerName(app),
     "Mobile Number": getMobile(app),
     "Vehicle Name": getVehicle(app),
     Status: status.charAt(0).toUpperCase() + status.slice(1),
+    // Server-generated createdAt — the same value shown in the table's Created column.
     "Created Date": formatDate(app?.createdAt),
     "Updated Date": formatDate(app?.updatedAt),
   }));
 
 const COL_WIDTHS = [
-  { wch: 20 },
-  { wch: 28 },
-  { wch: 28 },
-  { wch: 18 },
-  { wch: 25 },
-  { wch: 12 },
-  { wch: 24 },
-  { wch: 24 },
+  { wch: 20 }, // Application ID
+  { wch: 28 }, // Applicant Name
+  { wch: 18 }, // Branch
+  { wch: 28 }, // Dealer Name
+  { wch: 18 }, // Mobile Number
+  { wch: 25 }, // Vehicle Name
+  { wch: 12 }, // Status
+  { wch: 24 }, // Created Date
+  { wch: 24 }, // Updated Date
 ];
 
 const buildDateSuffix = (dateFrom, dateTo) => {

@@ -23,6 +23,31 @@ import {
   getStatCounts,
 } from "../utils/accessFilter.js";
 
+/**
+ * Augment a lean application document with normalized, flat fields for list
+ * views and Excel export, without dropping any existing fields (non-breaking).
+ *
+ * branchName / dealerName / applicantName are derived from the denormalized
+ * dealerDetails snapshot already stored on each record, so this adds no extra
+ * queries — no N+1. createdAt is the server-generated creation timestamp.
+ */
+function toListItem(app) {
+  const applicantName =
+    app?.applicant?.applicant?.name || app?.applicant?.name || "";
+  const dealerName = app?.dealerDetails?.name || "";
+  const branchName =
+    app?.dealerDetails?.branch || app?.dealerDetails?.Branch || "";
+
+  return {
+    ...app,
+    applicationId: app?.formId || String(app?._id || ""),
+    applicantName,
+    dealerName,
+    branchName,
+    // createdAt / updatedAt already present on the lean doc via timestamps.
+  };
+}
+
 // backfill dealer ObjectId from dealerDetails/applicant if missing
 async function backfillDealerRef(app) {
   if (!app) return null;
@@ -182,7 +207,7 @@ export const getPendingApplications = async (req, res) => {
       console.log(`[PERF] getPendingApplications: page=${page} limit=${limit} total=${total} returned=${applications.length} in ${Date.now() - t0}ms`);
     }
     return res.json({
-      items: applications,
+      items: applications.map(toListItem),
       page,
       limit,
       total,
@@ -441,6 +466,10 @@ export const approveApplication = async (req, res) => {
         dealerDetails: app.dealerDetails,
         status: "approved",
         workflowStage: "disbursement",
+        // Preserve the original submission timestamp. Without this, timestamps:true
+        // would stamp the approval time as createdAt. Mongoose 8 honors an explicit
+        // createdAt on create(); updatedAt is still set to now (the approval time).
+        createdAt: app.createdAt,
         history: [
           ...(app.history || []),
           {
@@ -513,6 +542,10 @@ export const rejectApplication = async (req, res) => {
     const rejectedDoc = new RejectedApplication({
       ...app.toObject(),
       status: "rejected",
+      // Preserve the original submission timestamp explicitly. The spread above
+      // carries it, but stating it makes the intent deterministic and immune to
+      // future refactors of the copied shape.
+      createdAt: app.createdAt,
       rejection: {
         rejectedBy: req.admin?.name || "system",
         reason,
@@ -583,7 +616,7 @@ export const getApprovedApplications = async (req, res) => {
       console.log(`[PERF] getApprovedApplications: page=${page} limit=${limit} total=${total} returned=${approvedApps.length} in ${Date.now() - t0}ms`);
     }
     res.json({
-      items: approvedApps,
+      items: approvedApps.map(toListItem),
       page,
       limit,
       total,
@@ -655,7 +688,7 @@ export const getRejectedApplications = async (req, res) => {
       console.log(`[PERF] getRejectedApplications: page=${page} limit=${limit} total=${total} returned=${items.length} in ${Date.now() - t0}ms`);
     }
     res.json({
-      items,
+      items: items.map(toListItem),
       page,
       limit,
       total,
