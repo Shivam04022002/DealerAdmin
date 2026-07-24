@@ -162,13 +162,18 @@ export default function FilesManagementTable({
   const approvedCount = stats?.approved || 0;
   const rejectedCount = stats?.rejected || 0;
 
-  /* ── selected rows helper ── */
+  /* ── selected rows helper ──
+     Selection is keyed by application id (see getRowId below), so we resolve
+     against the full dataset — not the filtered/paged view. A selected row that
+     is currently filtered out therefore stays counted and stays part of bulk
+     actions, and reappears selected when it becomes visible again. */
   const selectedRows = useMemo(() => {
+    const byId = new Map((allFiles || []).map((a) => [a._id || a.formId, a]));
     return Object.keys(rowSelection)
       .filter((k) => rowSelection[k])
-      .map((k) => filteredData[parseInt(k)])
+      .map((k) => byId.get(k))
       .filter(Boolean);
-  }, [rowSelection, filteredData]);
+  }, [rowSelection, allFiles]);
 
   /* ── column definitions ── */
   const columns = useMemo(() => [
@@ -311,6 +316,10 @@ export default function FilesManagementTable({
   const table = useReactTable({
     data: filteredData,
     columns,
+    // Track selection by the application's stable id, not the row index —
+    // otherwise a search/sort that reorders rows moves the checkbox onto a
+    // different application.
+    getRowId: (row) => row._id || row.formId,
     state: { rowSelection },
     onRowSelectionChange: setRowSelection,
     getCoreRowModel: getCoreRowModel(),

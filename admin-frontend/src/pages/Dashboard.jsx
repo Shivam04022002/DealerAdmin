@@ -459,10 +459,17 @@ const Dashboard = () => {
     setFilterStage(""); setFilterDateFrom(""); setFilterDateTo("");
   };
 
-  /* ── Selected rows helper ── */
-  const selectedRows = useMemo(() =>
-    Object.keys(rowSelection).filter((k) => rowSelection[k]).map((k) => filteredData[parseInt(k)]).filter(Boolean),
-  [rowSelection, filteredData]);
+  /* ── Selected rows helper ──
+     Keyed by application id (see getRowId below) and resolved against the full
+     dataset, so selections survive search/filter: a hidden selected row stays
+     counted, stays in bulk/export, and reappears selected when shown again. */
+  const selectedRows = useMemo(() => {
+    const byId = new Map((rawData || []).map((a) => [a._id || a.formId, a]));
+    return Object.keys(rowSelection)
+      .filter((k) => rowSelection[k])
+      .map((k) => byId.get(k))
+      .filter(Boolean);
+  }, [rowSelection, rawData]);
 
   /* ── Excel export ── */
   const handleExport = useCallback(async () => {
@@ -573,6 +580,10 @@ const Dashboard = () => {
   const table = useReactTable({
     data: filteredData,
     columns,
+    // Track selection by the application's stable id, not the row index —
+    // otherwise a search/sort that reorders rows moves the checkbox onto a
+    // different application.
+    getRowId: (row) => row._id || row.formId,
     state: { rowSelection },
     onRowSelectionChange: setRowSelection,
     getCoreRowModel: getCoreRowModel(),

@@ -297,6 +297,9 @@ export default function DealerManagementTable({
   const table = useReactTable({
     data,
     columns,
+    // Track selection by dealer id, not row index — otherwise filtering/sorting
+    // reorders rows and the selection lands on the wrong dealer.
+    getRowId: (row) => row._id,
     state: { globalFilter, sorting, rowSelection, pagination: { pageIndex: 0, pageSize } },
     onGlobalFilterChange: setGlobalFilter,
     onSortingChange: setSorting,
@@ -315,16 +318,15 @@ export default function DealerManagementTable({
     manualPagination: false,
   });
 
-  const selectedIds = Object.keys(rowSelection)
-    .map(idx => table.getFilteredRowModel().rows[idx]?.original._id)
-    .filter(Boolean);
+  // rowSelection is now keyed by dealer id (getRowId), so the selected keys are
+  // the ids directly — stable across filtering, sorting and pagination.
+  const selectedIds = Object.keys(rowSelection).filter((k) => rowSelection[k]);
 
   /* ── bulk export ── */
   const handleBulkExport = () => {
+    const byId = new Map(data.map((d) => [d._id, d]));
     const rows = selectedIds.length
-      ? table.getFilteredRowModel().rows
-          .filter((_, i) => rowSelection[i])
-          .map(r => r.original)
+      ? selectedIds.map((id) => byId.get(id)).filter(Boolean)
       : table.getFilteredRowModel().rows.map(r => r.original);
     exportToCSV(rows);
   };
