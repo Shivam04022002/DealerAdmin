@@ -457,7 +457,11 @@ export const approveApplication = async (req, res) => {
 
     const exists = await ApprovedApplication.findOne({ formId: app.formId }).lean();
     if (!exists) {
-      await ApprovedApplication.create({
+      // Preserve the original submission date as createdAt while stamping the
+      // approval time as updatedAt. When createdAt is set explicitly, Mongoose 8
+      // mirrors it onto updatedAt and ignores an explicit updatedAt on a normal
+      // save; save({ timestamps: false }) lets us set both deterministically.
+      const approvedDoc = new ApprovedApplication({
         formId: app.formId,
         applicant: app.applicant,
         coApplicant: app.coApplicant,
@@ -466,10 +470,8 @@ export const approveApplication = async (req, res) => {
         dealerDetails: app.dealerDetails,
         status: "approved",
         workflowStage: "disbursement",
-        // Preserve the original submission timestamp. Without this, timestamps:true
-        // would stamp the approval time as createdAt. Mongoose 8 honors an explicit
-        // createdAt on create(); updatedAt is still set to now (the approval time).
-        createdAt: app.createdAt,
+        createdAt: app.createdAt,   // original submission date
+        updatedAt: new Date(),      // approval time
         history: [
           ...(app.history || []),
           {
@@ -479,6 +481,7 @@ export const approveApplication = async (req, res) => {
           },
         ],
       });
+      await approvedDoc.save({ timestamps: false });
     }
 
     await Application.findByIdAndDelete(id);
@@ -542,10 +545,11 @@ export const rejectApplication = async (req, res) => {
     const rejectedDoc = new RejectedApplication({
       ...app.toObject(),
       status: "rejected",
-      // Preserve the original submission timestamp explicitly. The spread above
-      // carries it, but stating it makes the intent deterministic and immune to
-      // future refactors of the copied shape.
+      // Preserve the original submission date as createdAt; stamp the rejection
+      // time as updatedAt. save({ timestamps: false }) keeps both explicit values
+      // (see approval flow above for the Mongoose 8 timestamps behavior).
       createdAt: app.createdAt,
+      updatedAt: new Date(),
       rejection: {
         rejectedBy: req.admin?.name || "system",
         reason,
@@ -553,7 +557,7 @@ export const rejectApplication = async (req, res) => {
       },
     });
 
-    await rejectedDoc.save();
+    await rejectedDoc.save({ timestamps: false });
     await Application.findByIdAndDelete(id);
 
     await backfillDealerRef(app);
