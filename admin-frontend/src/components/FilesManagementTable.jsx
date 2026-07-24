@@ -15,6 +15,7 @@ import {
   flexRender,
 } from "@tanstack/react-table";
 import { exportApplicationsToExcel, exportAllToExcel } from "../utils/exportApplications";
+import API from "../services/api";
 
 /* ─── Brand colours (Surjit Finance) ─────────────────────────────────── */
 const BRAND = {
@@ -89,6 +90,7 @@ export default function FilesManagementTable({
   filesTab,
   setFilesTab,
   fetchAllFiles,
+  fetchStats,                // refresh KPI counts after bulk actions
   stats,
   onViewDetails,
   onRevoke,
@@ -115,6 +117,8 @@ export default function FilesManagementTable({
 
   /* ── bulk action confirm ── */
   const [bulkConfirm, setBulkConfirm] = useState(null); // "approve" | "reject" | null
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [toast, setToast] = useState(null); // { type: "success"|"error"|"warning", msg }
 
   /* debounce search */
   useEffect(() => {
@@ -370,11 +374,56 @@ export default function FilesManagementTable({
     }
   }, [selectedRows, filesTab, fetchAllFilesAll]);
 
+  /* ── toast (auto-dismiss) ── */
+  const showToast = useCallback((type, msg) => {
+    setToast({ type, msg });
+    setTimeout(() => setToast(null), 5000);
+  }, []);
+
   /* ── bulk actions ── */
   const handleBulkAction = useCallback((action) => {
     if (!selectedRows.length) { alert("Please select at least one row."); return; }
     setBulkConfirm(action);
   }, [selectedRows]);
+
+  // Execute the confirmed bulk action against the real API, then refresh.
+  const runBulkAction = useCallback(async () => {
+    const action = bulkConfirm; // "approve" | "reject"
+    const applicationIds = selectedRows.map((r) => r._id).filter(Boolean);
+    if (!action || !applicationIds.length) { setBulkConfirm(null); return; }
+
+    setBulkBusy(true);
+    try {
+      const endpoint = action === "approve" ? "/workflow/bulk-approve" : "/workflow/bulk-reject";
+      const { data } = await API.post(endpoint, { applicationIds });
+
+      const okCount = (action === "approve" ? data?.approvedCount : data?.rejectedCount) ?? 0;
+      const failCount = data?.failedCount ?? 0;
+      const verb = action === "approve" ? "approved" : "rejected";
+
+      // Refresh the current tab's rows and the KPI counts
+      await Promise.all([
+        fetchAllFiles ? fetchAllFiles(filesTab) : Promise.resolve(),
+        fetchStats ? fetchStats() : Promise.resolve(),
+      ]);
+      setRowSelection({});
+      setBulkConfirm(null);
+
+      if (failCount > 0) {
+        showToast(
+          "warning",
+          `${verb.charAt(0).toUpperCase() + verb.slice(1)} ${okCount} application${okCount !== 1 ? "s" : ""}. ${failCount} failed.`
+        );
+      } else {
+        showToast("success", `Successfully ${verb} ${okCount} application${okCount !== 1 ? "s" : ""}.`);
+      }
+    } catch (err) {
+      setBulkConfirm(null);
+      showToast("error", `Bulk ${action} failed: ${err?.response?.data?.error || err.message}`);
+    } finally {
+      setBulkBusy(false);
+    }
+  }, [bulkConfirm, selectedRows, fetchAllFiles, fetchStats, filesTab, showToast]);
 
   const clearFilters = () => {
     setGlobalSearch(""); setFilterBranch(""); setFilterDistrict("");
@@ -563,12 +612,17 @@ export default function FilesManagementTable({
             <span style={{ fontSize: 13, fontWeight: 700, color: BRAND.blue }}>
               {selectedRows.length} row{selectedRows.length !== 1 ? "s" : ""} selected
             </span>
-            <button className="fmt-btn fmt-btn-success" onClick={() => handleBulkAction("approve")}>
-              {checkIcon} Approve Selected
-            </button>
-            <button className="fmt-btn fmt-btn-danger" onClick={() => handleBulkAction("reject")}>
-              {xIcon} Reject Selected
-            </button>
+            {/* Approve/Reject only apply to Pending applications */}
+            {filesTab === "pending" && (
+              <>
+                <button className="fmt-btn fmt-btn-success" onClick={() => handleBulkAction("approve")} disabled={bulkBusy}>
+                  {checkIcon} Approve Selected
+                </button>
+                <button className="fmt-btn fmt-btn-danger" onClick={() => handleBulkAction("reject")} disabled={bulkBusy}>
+                  {xIcon} Reject Selected
+                </button>
+              </>
+            )}
             <button
               className="fmt-btn fmt-btn-blue"
               onClick={() => handleExport("selected")}
@@ -798,7 +852,7 @@ export default function FilesManagementTable({
             position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)",
             display: "flex", alignItems: "center", justifyContent: "center", zIndex: 99999,
           }}
-          onClick={(e) => e.target === e.currentTarget && setBulkConfirm(null)}
+          onClick={(e) => e.target === e.currentTarget && !bulkBusy && setBulkConfirm(null)}
         >
           <div style={{
             background: "#fff", borderRadius: 16, padding: 28, minWidth: 340,
@@ -814,19 +868,36 @@ export default function FilesManagementTable({
               This action cannot be undone.
             </p>
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-              <button className="fmt-btn fmt-btn-ghost" onClick={() => setBulkConfirm(null)}>Cancel</button>
+              <button className="fmt-btn fmt-btn-ghost" onClick={() => setBulkConfirm(null)} disabled={bulkBusy}>Cancel</button>
               <button
                 className={`fmt-btn ${bulkConfirm === "approve" ? "fmt-btn-success" : "fmt-btn-danger"}`}
-                onClick={() => {
-                  alert(`Bulk ${bulkConfirm} for ${selectedRows.length} records — integrate with your API.`);
-                  setBulkConfirm(null);
-                  setRowSelection({});
-                }}
+                onClick={runBulkAction}
+                disabled={bulkBusy}
               >
-                Confirm {bulkConfirm === "approve" ? "Approve" : "Reject"}
+                {bulkBusy
+                  ? "Processing…"
+                  : `Confirm ${bulkConfirm === "approve" ? "Approve" : "Reject"}`}
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* ═══ Toast ═══ */}
+      {toast && (
+        <div
+          style={{
+            position: "fixed", bottom: 24, right: 24, zIndex: 100000,
+            padding: "12px 18px", borderRadius: 10, fontSize: 14, fontWeight: 700,
+            color: "#fff", maxWidth: 380, boxShadow: "0 10px 30px rgba(0,0,0,0.25)",
+            background:
+              toast.type === "success" ? BRAND.green
+              : toast.type === "warning" ? BRAND.orange
+              : BRAND.red,
+          }}
+          onClick={() => setToast(null)}
+        >
+          {toast.msg}
         </div>
       )}
     </div>

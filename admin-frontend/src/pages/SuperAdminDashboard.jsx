@@ -2480,6 +2480,7 @@ table th {
           filesTab={filesTab}
           setFilesTab={setFilesTab}
           fetchAllFiles={fetchAllFiles}
+          fetchStats={fetchStats}
           stats={stats}
           onViewDetails={(app) => navigate(`/application/${app._id}`)}
           onRevoke={handleRevoke}

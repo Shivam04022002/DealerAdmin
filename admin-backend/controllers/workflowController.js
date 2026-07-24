@@ -414,175 +414,271 @@ export const updateWorkflowStage = async (req, res) => {
   }
 };
 
-// approve endpoint (POST /api/workflow/approve/:id)
-export const approveApplication = async (req, res) => {
-  const { id } = req.params;
+/* ============================================================
+   approveApplicationCore(id, admin, note)
+   ------------------------------------------------------------
+   Single source of truth for approving ONE application. Used by
+   both the single endpoint (approveApplication) and the bulk
+   endpoint (bulkApproveApplications) so the business logic and
+   validations are never duplicated.
+
+   Returns a structured result:
+     { success: true,  id, formId }
+     { success: false, id, formId?, code, message }
+   Throws only on unexpected errors (caller maps to 500).
+   ============================================================ */
+async function approveApplicationCore(id, admin, note) {
+  const app = await Application.findById(id);
+  if (!app) return { success: false, id, code: "not_found", message: "Application not found" };
+
+  await backfillDealerRef(app);
+  if (!app.dealer) {
+    return { success: false, id, formId: app.formId, code: "dealer_missing", message: "Dealer reference missing" };
+  }
+
+  // Log the approval before moving (use original app ID)
   try {
-    const app = await Application.findById(id);
-    if (!app) return res.status(404).json({ error: "Application not found" });
-
-    await backfillDealerRef(app);
-    if (!app.dealer) {
-      return res.status(422).json({ error: "Dealer reference missing", details: "Cannot approve without dealer ObjectId" });
-    }
-
-    // Log the approval before moving (use original app ID)
-    try {
-      await ActivityLog.create({
-        adminId: req.admin?._id || req.admin?.id,
-        applicationId: app._id,
-        action: "APPROVE",
-        fromStage: app.workflowStage || null,
-        toStage: "disbursement",
-        notes: req.body?.note || "Application approved via admin UI",
-        at: new Date()
-      });
-    } catch (logErr) {
-      console.error("Failed to log approval:", logErr);
-      // Don't block the request if logging fails
-    }
-
-    // Audit history entry
-    await createHistoryEntry({
+    await ActivityLog.create({
+      adminId: admin?._id || admin?.id,
       applicationId: app._id,
-      formId: app.formId,
-      actionType: "APPROVED",
-      oldValue: app.workflowStage || null,
-      newValue: "disbursement",
-      remarks: req.body?.note || "Application approved via admin UI",
-      updatedBy: (req.admin && (req.admin.name || req.admin.email)) || "admin",
-      updatedByRole: req.admin?.role || "admin",
-      updatedByAdminId: req.admin?._id || req.admin?.id || null,
+      action: "APPROVE",
+      fromStage: app.workflowStage || null,
+      toStage: "disbursement",
+      notes: note || "Application approved via admin UI",
+      at: new Date()
     });
+  } catch (logErr) {
+    console.error("Failed to log approval:", logErr);
+    // Don't block on logging failure
+  }
 
-    const exists = await ApprovedApplication.findOne({ formId: app.formId }).lean();
-    if (!exists) {
-      // Preserve the original submission date as createdAt while stamping the
-      // approval time as updatedAt. When createdAt is set explicitly, Mongoose 8
-      // mirrors it onto updatedAt and ignores an explicit updatedAt on a normal
-      // save; save({ timestamps: false }) lets us set both deterministically.
-      const approvedDoc = new ApprovedApplication({
-        // Preserve the original identity. ActivityLog.applicationId and
-        // ApplicationHistory.applicationId store the source Application._id;
-        // reusing it here keeps those references joinable (the admin activity
-        // feed joins logs to applications by _id) and matches the reject flow,
-        // which already keeps the original _id. Separate collection, so no key
-        // collision. The findOne({ formId }) guard above prevents re-approval.
-        _id: app._id,
-        formId: app.formId,
-        applicant: app.applicant,
-        coApplicant: app.coApplicant,
-        vehicleDetails: app.vehicleDetails,
-        dealer: app.dealer,
-        dealerDetails: app.dealerDetails,
-        status: "approved",
-        workflowStage: "disbursement",
-        createdAt: app.createdAt,   // original submission date
-        updatedAt: new Date(),      // approval time
-        history: [
-          ...(app.history || []),
-          {
-            updatedBy: req.admin?.name || "system",
-            updatedAt: new Date(),
-            changes: "Application approved and moved to Approved collection",
-          },
-        ],
-      });
-      await approvedDoc.save({ timestamps: false });
-    }
+  // Audit history entry
+  await createHistoryEntry({
+    applicationId: app._id,
+    formId: app.formId,
+    actionType: "APPROVED",
+    oldValue: app.workflowStage || null,
+    newValue: "disbursement",
+    remarks: note || "Application approved via admin UI",
+    updatedBy: (admin && (admin.name || admin.email)) || "admin",
+    updatedByRole: admin?.role || "admin",
+    updatedByAdminId: admin?._id || admin?.id || null,
+  });
 
-    await Application.findByIdAndDelete(id);
-    
-    // Notify the user natively
-    if (app.dealer) {
-      await sendPushNotification(
-        app.dealer,
-        "Application Approved",
-        "Your application has been approved.",
-        "approved",
-        app.formId
-      );
-    }
+  const exists = await ApprovedApplication.findOne({ formId: app.formId }).lean();
+  if (!exists) {
+    // Preserve the original submission date as createdAt while stamping the
+    // approval time as updatedAt. When createdAt is set explicitly, Mongoose 8
+    // mirrors it onto updatedAt and ignores an explicit updatedAt on a normal
+    // save; save({ timestamps: false }) lets us set both deterministically.
+    const approvedDoc = new ApprovedApplication({
+      // Preserve the original identity (see reference-integrity note): reusing
+      // Application._id keeps ActivityLog/ApplicationHistory joins valid. The
+      // findOne({ formId }) guard above prevents re-approval.
+      _id: app._id,
+      formId: app.formId,
+      applicant: app.applicant,
+      coApplicant: app.coApplicant,
+      vehicleDetails: app.vehicleDetails,
+      dealer: app.dealer,
+      dealerDetails: app.dealerDetails,
+      status: "approved",
+      workflowStage: "disbursement",
+      createdAt: app.createdAt,   // original submission date
+      updatedAt: new Date(),      // approval time
+      history: [
+        ...(app.history || []),
+        {
+          updatedBy: admin?.name || "system",
+          updatedAt: new Date(),
+          changes: "Application approved and moved to Approved collection",
+        },
+      ],
+    });
+    await approvedDoc.save({ timestamps: false });
+  }
 
-    return res.json({ message: "Application approved and moved" });
+  await Application.findByIdAndDelete(id);
+
+  // Notify the user natively
+  if (app.dealer) {
+    await sendPushNotification(
+      app.dealer,
+      "Application Approved",
+      "Your application has been approved.",
+      "approved",
+      app.formId
+    );
+  }
+
+  return { success: true, id, formId: app.formId };
+}
+
+// approve endpoint (POST /api/workflow/approve/:id) — thin wrapper over core
+export const approveApplication = async (req, res) => {
+  try {
+    const r = await approveApplicationCore(req.params.id, req.admin, req.body?.note);
+    if (r.success) return res.json({ message: "Application approved and moved" });
+    if (r.code === "not_found") return res.status(404).json({ error: r.message });
+    if (r.code === "dealer_missing")
+      return res.status(422).json({ error: r.message, details: "Cannot approve without dealer ObjectId" });
+    return res.status(400).json({ error: r.message });
   } catch (err) {
     console.error("approveApplication error:", err);
     return res.status(500).json({ error: err.message });
   }
 };
 
-// Reject application (copy then delete original)
-export const rejectApplication = async (req, res) => {
-  const { id } = req.params;
-  const { reason } = req.body;
+/* ============================================================
+   rejectApplicationCore(id, admin, reason, note)
+   ------------------------------------------------------------
+   Single source of truth for rejecting ONE application. Used by
+   both the single endpoint and the bulk endpoint — no duplication.
+   ============================================================ */
+async function rejectApplicationCore(id, admin, reason, note) {
+  const app = await Application.findById(id);
+  if (!app) return { success: false, id, code: "not_found", message: "Application not found" };
 
+  // Log the rejection before moving (use original app ID)
   try {
-    const app = await Application.findById(id);
-    if (!app) return res.status(404).json({ message: "Application not found" });
-
-    // Log the rejection before moving (use original app ID)
-    try {
-      await ActivityLog.create({
-        adminId: req.admin?._id || req.admin?.id,
-        applicationId: app._id,
-        action: "REJECT",
-        fromStage: app.workflowStage || null,
-        toStage: "rejected",
-        notes: req.body?.note || reason || "Application rejected",
-        at: new Date()
-      });
-    } catch (logErr) {
-      console.error("Failed to log rejection:", logErr);
-      // Don't block the request if logging fails
-    }
-
-    // Audit history entry
-    await createHistoryEntry({
+    await ActivityLog.create({
+      adminId: admin?._id || admin?.id,
       applicationId: app._id,
-      formId: app.formId,
-      actionType: "REJECTED",
-      oldValue: app.workflowStage || null,
-      newValue: "rejected",
-      remarks: req.body?.note || reason || "Application rejected",
-      updatedBy: (req.admin && (req.admin.name || req.admin.email)) || "admin",
-      updatedByRole: req.admin?.role || "admin",
-      updatedByAdminId: req.admin?._id || req.admin?.id || null,
+      action: "REJECT",
+      fromStage: app.workflowStage || null,
+      toStage: "rejected",
+      notes: note || reason || "Application rejected",
+      at: new Date()
     });
+  } catch (logErr) {
+    console.error("Failed to log rejection:", logErr);
+    // Don't block on logging failure
+  }
 
-    const rejectedDoc = new RejectedApplication({
-      ...app.toObject(),
-      status: "rejected",
-      // Preserve the original submission date as createdAt; stamp the rejection
-      // time as updatedAt. save({ timestamps: false }) keeps both explicit values
-      // (see approval flow above for the Mongoose 8 timestamps behavior).
-      createdAt: app.createdAt,
-      updatedAt: new Date(),
-      rejection: {
-        rejectedBy: req.admin?.name || "system",
-        reason,
-        rejectedAt: new Date(),
-      },
-    });
+  // Audit history entry
+  await createHistoryEntry({
+    applicationId: app._id,
+    formId: app.formId,
+    actionType: "REJECTED",
+    oldValue: app.workflowStage || null,
+    newValue: "rejected",
+    remarks: note || reason || "Application rejected",
+    updatedBy: (admin && (admin.name || admin.email)) || "admin",
+    updatedByRole: admin?.role || "admin",
+    updatedByAdminId: admin?._id || admin?.id || null,
+  });
 
-    await rejectedDoc.save({ timestamps: false });
-    await Application.findByIdAndDelete(id);
+  const rejectedDoc = new RejectedApplication({
+    ...app.toObject(),
+    status: "rejected",
+    // Preserve the original submission date as createdAt; stamp the rejection
+    // time as updatedAt. save({ timestamps: false }) keeps both explicit values.
+    createdAt: app.createdAt,
+    updatedAt: new Date(),
+    rejection: {
+      rejectedBy: admin?.name || "system",
+      reason,
+      rejectedAt: new Date(),
+    },
+  });
 
-    await backfillDealerRef(app);
-    if (app.dealer) {
-      await sendPushNotification(
-        app.dealer,
-        "Application Rejected",
-        req.body?.note || reason || "Your application was rejected.",
-        "rejected",
-        app.formId
-      );
-    }
+  await rejectedDoc.save({ timestamps: false });
+  await Application.findByIdAndDelete(id);
 
-    return res.json({ message: "Application moved to Rejected collection" });
+  await backfillDealerRef(app);
+  if (app.dealer) {
+    await sendPushNotification(
+      app.dealer,
+      "Application Rejected",
+      note || reason || "Your application was rejected.",
+      "rejected",
+      app.formId
+    );
+  }
+
+  return { success: true, id, formId: app.formId };
+}
+
+// Reject application (POST /api/workflow/reject/:id) — thin wrapper over core
+export const rejectApplication = async (req, res) => {
+  try {
+    const r = await rejectApplicationCore(req.params.id, req.admin, req.body?.reason, req.body?.note);
+    if (r.success) return res.json({ message: "Application moved to Rejected collection" });
+    if (r.code === "not_found") return res.status(404).json({ message: r.message });
+    return res.status(400).json({ error: r.message });
   } catch (err) {
     console.error("rejectApplication error:", err);
     return res.status(500).json({ error: err.message });
   }
+};
+
+/* ============================================================
+   Bulk approve / reject
+   POST /api/workflow/bulk-approve  { applicationIds: [...] }
+   POST /api/workflow/bulk-reject   { applicationIds: [...], reason? }
+   ------------------------------------------------------------
+   Reuse the exact *Core functions above — same business logic and
+   validations as the single endpoints. Each application is processed
+   independently; a failure on one does not abort the rest, and all
+   failures are returned (never silently ignored).
+   ============================================================ */
+export const bulkApproveApplications = async (req, res) => {
+  const ids = Array.isArray(req.body?.applicationIds)
+    ? req.body.applicationIds.filter(Boolean)
+    : [];
+  if (!ids.length) {
+    return res.status(400).json({ error: "applicationIds must be a non-empty array" });
+  }
+
+  const approved = [];
+  const failed = [];
+  for (const id of ids) {
+    try {
+      const r = await approveApplicationCore(id, req.admin, req.body?.note);
+      if (r.success) approved.push({ id, formId: r.formId });
+      else failed.push({ id, formId: r.formId || null, reason: r.message });
+    } catch (err) {
+      console.error("bulkApprove item failed:", id, err.message);
+      failed.push({ id, reason: err.message });
+    }
+  }
+
+  return res.json({
+    approvedCount: approved.length,
+    failedCount: failed.length,
+    approved,
+    failed,
+  });
+};
+
+export const bulkRejectApplications = async (req, res) => {
+  const ids = Array.isArray(req.body?.applicationIds)
+    ? req.body.applicationIds.filter(Boolean)
+    : [];
+  if (!ids.length) {
+    return res.status(400).json({ error: "applicationIds must be a non-empty array" });
+  }
+  const reason = req.body?.reason || "Bulk rejected";
+
+  const rejected = [];
+  const failed = [];
+  for (const id of ids) {
+    try {
+      const r = await rejectApplicationCore(id, req.admin, reason, req.body?.note);
+      if (r.success) rejected.push({ id, formId: r.formId });
+      else failed.push({ id, formId: r.formId || null, reason: r.message });
+    } catch (err) {
+      console.error("bulkReject item failed:", id, err.message);
+      failed.push({ id, reason: err.message });
+    }
+  }
+
+  return res.json({
+    rejectedCount: rejected.length,
+    failedCount: failed.length,
+    rejected,
+    failed,
+  });
 };
 
 // List approved applications — paginated, searchable, permission-filtered

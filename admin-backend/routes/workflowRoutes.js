@@ -15,6 +15,8 @@ import {
   getApplicationById,
   getPendingApplicationById,
   approveApplication,
+  bulkApproveApplications,
+  bulkRejectApplications,
   getApprovedApplications,
   getApprovedApplicationById,
   fixDealerForApplications,
@@ -53,6 +55,10 @@ router.patch('/applications/update/:id', protect, updateWorkflowStage);
 // approve / reject / lists
 router.post('/approve/:id', protect, approveApplication);
 router.post('/reject/:id', protect, rejectApplication);
+
+// Bulk approve / reject — same core logic as the single endpoints
+router.post('/bulk-approve', protect, bulkApproveApplications);
+router.post('/bulk-reject', protect, bulkRejectApplications);
 
 router.get('/applications/approved', protect, getApprovedApplications);
 router.get('/applications/rejected', protect, getRejectedApplications);
