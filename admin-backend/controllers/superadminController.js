@@ -9,7 +9,16 @@ import ApprovedApplication from "../models/ApprovedApplication.js";
 import RejectedApplication from "../models/RejectedApplication.js";
 import { sendPushNotification } from "../utils/sendPushNotification.js";
 import { createHistoryEntry } from "./formTrackingController.js";
-import { getStatCounts, getPendingAccessFilter, buildFinalizedFilter } from "../utils/accessFilter.js";
+import { getStatCounts } from "../utils/accessFilter.js";
+import {
+  modelForType,
+  buildFilesFilter,
+  parsePaging,
+  wantsPagination,
+  buildSort,
+  selectForType,
+  DEALER_POPULATE,
+} from "../utils/filesQuery.js";
 
 export const createAdmin = async (req, res) => {
   try {
@@ -240,64 +249,121 @@ export const applicationStats = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/superadmin/files/:type
+ *
+ * Two response shapes, chosen by the CALLER:
+ *
+ *   no page/limit  →  a bare array, exactly as before. The Super Admin frontend
+ *                     deployed today sends no query parameters and reads the
+ *                     result as `Array.isArray(data) ? data : []`, so this
+ *                     branch is what keeps it working while it is unmigrated.
+ *   page or limit  →  { items, page, limit, total, pages }.
+ *
+ * The paginated branch is the point of the change: pending currently ships all
+ * 776 records (~2.1MB, ~21.8s) on every dashboard load, while the database
+ * itself answers in 8ms. A 50-row page moves ~139KB instead.
+ *
+ * The type selects the collection, the filter and the projection through
+ * filesQuery, which is also what the facets and the bulk action use — so all
+ * of them necessarily agree about which records match.
+ *
+ * `rejected` keeps the nested `rejection` object in its projection: the
+ * rejection timestamp/reason live at rejection.rejectedAt / rejection.reason,
+ * and updatedAt is unreliable there (historical records left it equal to the
+ * submission date).
+ */
 export const getFilesByType = async (req, res) => {
   try {
     const { type } = req.params;
-    let applications = [];
-
-    const basePending = {
-      $or: [
-        { status: { $in: ["pending", null] } },
-        { workflowStage: { $exists: false } },
-        { workflowStage: { $nin: ["disbursed", "rejected", "approved"] } },
-      ],
-    };
-
-    switch (type) {
-      case "pending": {
-        const accessFilter = getPendingAccessFilter(req.admin);
-        const filter =
-          Object.keys(accessFilter).length === 0
-            ? basePending
-            : { $and: [basePending, accessFilter] };
-        applications = await Application.find(filter)
-          .select("formId applicant coApplicant vehicleDetails dealer dealerDetails status workflowStage createdAt updatedAt")
-          .populate("dealer", "email userId name district branch")
-          .lean();
-        break;
-      }
-
-      case "approved": {
-        const filter = await buildFinalizedFilter(req.admin);
-        // updatedAt is the approval time; there is no separate approvedAt field.
-        applications = await ApprovedApplication.find(filter)
-          .select("formId applicant coApplicant vehicleDetails dealer dealerDetails status workflowStage createdAt updatedAt")
-          .populate("dealer", "email userId name district branch")
-          .lean();
-        break;
-      }
-
-      case "rejected": {
-        const filter = await buildFinalizedFilter(req.admin);
-        // The rejection timestamp/reason live under the nested `rejection`
-        // object (rejection.rejectedAt / rejection.reason) — the previous select
-        // named non-existent top-level rejectedAt/reason, so neither reached the
-        // client. updatedAt is unreliable here (historical records left it equal
-        // to the submission date), so the export must read rejection.rejectedAt.
-        applications = await RejectedApplication.find(filter)
-          .select("formId applicant coApplicant vehicleDetails dealer dealerDetails status workflowStage rejection createdAt updatedAt")
-          .populate("dealer", "email userId name district branch")
-          .lean();
-        break;
-      }
-
-      default:
-        return res.status(400).json({ message: "Invalid type. Use: pending, approved, or rejected" });
+    const Model = modelForType(type);
+    if (!Model) {
+      return res.status(400).json({ message: "Invalid type. Use: pending, approved, or rejected" });
     }
 
-    return res.json(applications);
+    const filter = await buildFilesFilter(type, req.admin, req.query);
+    const select = selectForType(type);
+
+    if (!wantsPagination(req.query)) {
+      const applications = await Model.find(filter)
+        .select(select)
+        .populate(DEALER_POPULATE.path, DEALER_POPULATE.select)
+        .lean();
+      return res.json(applications);
+    }
+
+    const { page, limit, skip } = parsePaging(req.query);
+    const sort = buildSort(req.query);
+
+    // The count runs alongside the page rather than after it; both use the
+    // identical filter, and the sort rides the existing createdAt_-1 index.
+    const [items, total] = await Promise.all([
+      Model.find(filter)
+        .select(select)
+        .populate(DEALER_POPULATE.path, DEALER_POPULATE.select)
+        .sort(sort)
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Model.countDocuments(filter),
+    ]);
+
+    return res.json({ items, page, limit, total, pages: Math.ceil(total / limit) });
   } catch (err) {
     console.error("getFilesByType:", err);
+    return res.status(500).json({ message: "Server error" });
+  }
+};
+
+/**
+ * GET /api/superadmin/files/:type/facets
+ *
+ * The dropdown options for branch / district / stage. These used to be derived
+ * in the browser from the full collection; once the browser only holds one
+ * page, the server has to supply them or the filters would only ever offer the
+ * values visible on the current page.
+ *
+ * Must be declared BEFORE /files/:type in the router, or "pending/facets" is
+ * swallowed by :type.
+ */
+export const getFileFacets = async (req, res) => {
+  try {
+    const { type } = req.params;
+    const Model = modelForType(type);
+    if (!Model) {
+      return res.status(400).json({ message: "Invalid type. Use: pending, approved, or rejected" });
+    }
+
+    // Each facet excludes its own current selection, so choosing "Branch A"
+    // does not reduce the Branch list to just "Branch A".
+    const without = (key) => {
+      const q = { ...req.query };
+      delete q[key];
+      return buildFilesFilter(type, req.admin, q);
+    };
+
+    const [branchFilter, districtFilter, stageFilter] = await Promise.all([
+      without("branch"),
+      without("district"),
+      without("stage"),
+    ]);
+
+    const [branches, districts, stages] = await Promise.all([
+      Model.distinct("dealerDetails.branch", branchFilter),
+      Model.distinct("dealerDetails.district", districtFilter),
+      Model.distinct("workflowStage", stageFilter),
+    ]);
+
+    const clean = (list) =>
+      [...new Set(list.filter((v) => typeof v === "string" && v.trim()))].sort();
+
+    return res.json({
+      branches: clean(branches),
+      districts: clean(districts),
+      stages: clean(stages),
+    });
+  } catch (err) {
+    console.error("getFileFacets:", err);
     return res.status(500).json({ message: "Server error" });
   }
 };

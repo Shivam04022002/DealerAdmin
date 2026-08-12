@@ -12,6 +12,7 @@ import {
   applicationStats,
   applicationHistory,
   getFilesByType,
+  getFileFacets,
   getAdminActivity,
   revokeRejectedApplication,
   createDealer,
@@ -39,6 +40,7 @@ router.get("/dashboard/stats", applicationStats);
 router.get("/dashboard/application/:applicationId/history", applicationHistory);
 router.get("/dashboard/admin/:adminId/activity", getAdminActivity);
 
+router.get("/files/:type/facets", getFileFacets); // Must come before /files/:type or ":type" swallows "pending/facets"
 router.get("/files/:type", getFilesByType);
 router.post("/applications/revoke", revokeRejectedApplication);
 
