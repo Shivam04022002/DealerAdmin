@@ -9,12 +9,10 @@ import React, {
 import {
   useReactTable,
   getCoreRowModel,
-  getSortedRowModel,
-  getFilteredRowModel,
-  getPaginationRowModel,
   flexRender,
 } from "@tanstack/react-table";
 import { exportApplicationsToExcel, exportAllToExcel } from "../utils/exportApplications";
+import { MAX_BULK, PAGE_SIZES } from "../hooks/useSuperAdminFiles";
 import API from "../services/api";
 
 /* ─── Brand colours (Surjit Finance) ─────────────────────────────────── */
@@ -96,19 +94,34 @@ export default function FilesManagementTable({
   onRevoke,
   busy,
   fetchAllFilesAll,          // callback to get {pending, approved, rejected} for export-all
+  files,                     // useSuperAdminFiles(): server-driven query state
 }) {
-  /* ── local filter state ── */
-  const [globalSearch, setGlobalSearch]     = useState("");
-  const [searchDebounced, setSearchDebounced] = useState("");
-  const [filterStatus,  setFilterStatus]    = useState("all");
-  const [filterBranch,  setFilterBranch]    = useState("");
-  const [filterDistrict, setFilterDistrict] = useState("");
-  const [filterStage,   setFilterStage]     = useState("");
-  const [filterDateFrom, setFilterDateFrom] = useState("");
-  const [filterDateTo,   setFilterDateTo]   = useState("");
+  /* ── filter state — now owned by the server, via useSuperAdminFiles ──
+   *
+   * Search, branch, district, stage and the date range used to be applied here
+   * over a fully downloaded dataset. They are query parameters now: the inputs
+   * below are controlled by the hook, and every change refetches one page.
+   * `filterStatus` stays local because it is the tab, not a query. */
+  const globalSearch = files.search;
+  const setGlobalSearch = files.setSearch;
+  const filterBranch = files.branch;
+  const setFilterBranch = files.setBranch;
+  const filterDistrict = files.district;
+  const setFilterDistrict = files.setDistrict;
+  const filterStage = files.stage;
+  const setFilterStage = files.setStage;
+  const filterDateFrom = files.from;
+  const setFilterDateFrom = files.setFrom;
+  const filterDateTo = files.to;
+  const setFilterDateTo = files.setTo;
+  const [filterStatus, setFilterStatus] = useState("all");
 
   /* ── selection ── */
   const [rowSelection, setRowSelection] = useState({});
+  /** id → row, captured at tick time so a selection survives paging. */
+  const [selectedById, setSelectedById] = useState(() => new Map());
+  /** "everything matching the current filter", resolved server-side. */
+  const [selectAllMatching, setSelectAllMatching] = useState(false);
 
   /* ── export ── */
   const [exporting, setExporting] = useState({
@@ -120,54 +133,28 @@ export default function FilesManagementTable({
   const [bulkBusy, setBulkBusy] = useState(false);
   const [toast, setToast] = useState(null); // { type: "success"|"error"|"warning", msg }
 
-  /* debounce search */
-  useEffect(() => {
-    const t = setTimeout(() => setSearchDebounced(globalSearch), 250);
-    return () => clearTimeout(t);
-  }, [globalSearch]);
+  /* Search debouncing lives in the hook now — it decides when to send. */
 
-  /* reset selection on tab change */
-  useEffect(() => { setRowSelection({}); }, [filesTab]);
+  /* Selection resets on tab change, and also whenever the filter changes:
+     "all 137 matching" is meaningless once the criteria move. */
+  useEffect(() => { setRowSelection({}); setSelectAllMatching(false); }, [filesTab]);
+  useEffect(() => { setSelectAllMatching(false); }, [files.filterParams]);
 
-  /* ── derive unique filter options from current data ── */
-  const branchOptions = useMemo(() =>
-    [...new Set(allFiles.map((a) => getDealerBranch(a)).filter((v) => v !== "—"))].sort(),
-  [allFiles]);
+  /* ── filter options come from the server ──
+   * Deriving these from the loaded rows would offer only the values that happen
+   * to appear on the current page. The facets endpoint computes them over the
+   * whole filtered set. */
+  const branchOptions = files.facets.branches;
+  const districtOptions = files.facets.districts;
+  const stageOptions = files.facets.stages;
 
-  const districtOptions = useMemo(() =>
-    [...new Set(allFiles.map((a) => getDealerDistrict(a)).filter((v) => v !== "—"))].sort(),
-  [allFiles]);
-
-  const stageOptions = useMemo(() =>
-    [...new Set(allFiles.map((a) => getStage(a)).filter((v) => v !== "—"))].sort(),
-  [allFiles]);
-
-  /* ── filtered data ── */
-  const filteredData = useMemo(() => {
-    let data = allFiles;
-
-    if (searchDebounced) {
-      const q = searchDebounced.toLowerCase();
-      data = data.filter((a) =>
-        (a?.formId || "").toLowerCase().includes(q) ||
-        getApplicantName(a).toLowerCase().includes(q) ||
-        getDealerName(a).toLowerCase().includes(q)
-      );
-    }
-    if (filterBranch)   data = data.filter((a) => getDealerBranch(a)   === filterBranch);
-    if (filterDistrict) data = data.filter((a) => getDealerDistrict(a) === filterDistrict);
-    if (filterStage)    data = data.filter((a) => getStage(a)           === filterStage);
-    if (filterDateFrom) {
-      const from = new Date(filterDateFrom); from.setHours(0,0,0,0);
-      data = data.filter((a) => a?.createdAt && new Date(a.createdAt) >= from);
-    }
-    if (filterDateTo) {
-      const to = new Date(filterDateTo); to.setHours(23,59,59,999);
-      data = data.filter((a) => a?.createdAt && new Date(a.createdAt) <= to);
-    }
-
-    return data;
-  }, [allFiles, searchDebounced, filterBranch, filterDistrict, filterStage, filterDateFrom, filterDateTo]);
+  /* ── rows ──
+   * The server already applied the search, the filters and the sort, so this is
+   * the page as returned. No client-side narrowing remains: doing any here
+   * would filter 50 rows out of a matching set of thousands and read as data
+   * loss. `totalFiltered` is the server's count of everything matching. */
+  const filteredData = allFiles;
+  const totalFiltered = files.total;
 
   /* ── summary counts (for KPI cards) ── */
   const totalCount    = (stats?.pending || 0) + (stats?.approved || 0) + (stats?.rejected || 0);
@@ -175,18 +162,27 @@ export default function FilesManagementTable({
   const approvedCount = stats?.approved || 0;
   const rejectedCount = stats?.rejected || 0;
 
-  /* ── selected rows helper ──
-     Selection is keyed by application id (see getRowId below), so we resolve
-     against the full dataset — not the filtered/paged view. A selected row that
-     is currently filtered out therefore stays counted and stays part of bulk
-     actions, and reappears selected when it becomes visible again. */
-  const selectedRows = useMemo(() => {
-    const byId = new Map((allFiles || []).map((a) => [a._id || a.formId, a]));
-    return Object.keys(rowSelection)
-      .filter((k) => rowSelection[k])
-      .map((k) => byId.get(k))
-      .filter(Boolean);
-  }, [rowSelection, allFiles]);
+  /* ── selection ──
+   *
+   * Two modes, because one page is all that is in memory:
+   *
+   *   explicit        the operator ticked specific rows. The row OBJECT is kept
+   *                   as it is ticked, so a selection made on page 1 survives
+   *                   paging to page 3 — previously this worked only because
+   *                   every row happened to be loaded.
+   *   selectAllMatching  the operator asked for everything matching the current
+   *                   filter. No ids are held; the filter itself is sent, and
+   *                   the server resolves and re-counts it.
+   *
+   * Mixing them would be ambiguous, so turning one on clears the other. */
+  const selectedRows = useMemo(
+    () => Object.keys(rowSelection).filter((k) => rowSelection[k]).map((k) => selectedById.get(k)).filter(Boolean),
+    [rowSelection, selectedById]
+  );
+
+  /** How many records the pending action will actually touch. */
+  const selectionCount = selectAllMatching ? totalFiltered : selectedRows.length;
+  const overBulkLimit = selectAllMatching && totalFiltered > MAX_BULK;
 
   /* ── column definitions ── */
   const columns = useMemo(() => [
@@ -212,9 +208,15 @@ export default function FilesManagementTable({
       enableSorting: false,
       size: 42,
     },
+    /* Sorting is the server's job now, and the server sorts by createdAt only —
+     * that is the one field indexed for it. These columns therefore carry
+     * enableSorting: false so their headers stay inert: with manualSorting on,
+     * a clickable header here would show a sort arrow, reorder nothing, and
+     * read as a broken control. Created keeps its header, wired to `dir`. */
     {
       accessorKey: "formId",
       header: "App ID",
+      enableSorting: false,
       cell: (info) => (
         <span style={{ fontWeight: 700, color: BRAND.blue, fontSize: 12 }}>
           {info.getValue() || "—"}
@@ -226,6 +228,7 @@ export default function FilesManagementTable({
       id: "applicantName",
       header: "Customer Name",
       accessorFn: getApplicantName,
+      enableSorting: false,
       size: 160,
       cell: (info) => <span style={{ fontWeight: 600 }}>{info.getValue()}</span>,
     },
@@ -233,24 +236,28 @@ export default function FilesManagementTable({
       id: "dealerName",
       header: "Dealer Name",
       accessorFn: getDealerName,
+      enableSorting: false,
       size: 150,
     },
     {
       id: "branch",
       header: "Branch",
       accessorFn: getDealerBranch,
+      enableSorting: false,
       size: 120,
     },
     {
       id: "district",
       header: "District",
       accessorFn: getDealerDistrict,
+      enableSorting: false,
       size: 120,
     },
     {
       id: "stage",
       header: "Stage",
       accessorFn: getStage,
+      enableSorting: false,
       size: 160,
       cell: (info) => (
         <span style={{
@@ -325,6 +332,53 @@ export default function FilesManagementTable({
     },
   ], [filesTab, onViewDetails, onRevoke, busy]);
 
+  /**
+   * Keep the id→row map in step with the checkboxes.
+   *
+   * TanStack tracks only which ids are selected. With every row loaded that was
+   * enough, because the object could always be looked up again; with one page
+   * in memory it is not. The row object is therefore captured as it is ticked,
+   * so a selection made on page 1 is still exportable and still actionable
+   * after paging to page 3.
+   */
+  /* ── sorting ──
+   *
+   * Controlled from the hook rather than held inside TanStack, because the
+   * reorder happens in the database: the header only chooses a direction on
+   * createdAt, which is sent as `dir` and changes which rows page 1 contains.
+   * Keeping it in TanStack's own state would move the arrow without moving the
+   * data. Clearing the sort falls back to the server default, desc. */
+  const sorting = useMemo(
+    () => [{ id: "createdAt", desc: files.dir !== "asc" }],
+    [files.dir]
+  );
+
+  const handleSortingChange = useCallback((updater) => {
+    const next = typeof updater === "function" ? updater(sorting) : updater;
+    const createdAt = (next || []).find((s) => s.id === "createdAt");
+    files.setDir(createdAt ? (createdAt.desc ? "desc" : "asc") : "desc");
+  }, [sorting, files]);
+
+  const handleRowSelectionChange = useCallback((updater) => {
+    setRowSelection((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      setSelectedById((prevMap) => {
+        const map = new Map(prevMap);
+        // Add anything newly ticked, from the rows currently on screen.
+        for (const row of allFiles || []) {
+          const id = row._id || row.formId;
+          if (next[id]) map.set(id, row);
+        }
+        // Drop anything no longer ticked, wherever it came from.
+        for (const id of [...map.keys()]) if (!next[id]) map.delete(id);
+        return map;
+      });
+      // An explicit tick and "all matching" are different requests.
+      if (Object.values(next).some(Boolean)) setSelectAllMatching(false);
+      return next;
+    });
+  }, [allFiles]);
+
   /* ── table instance ── */
   const table = useReactTable({
     data: filteredData,
@@ -333,19 +387,23 @@ export default function FilesManagementTable({
     // otherwise a search/sort that reorders rows moves the checkbox onto a
     // different application.
     getRowId: (row) => row._id || row.formId,
-    state: { rowSelection },
-    onRowSelectionChange: setRowSelection,
+    state: { rowSelection, sorting },
+    onRowSelectionChange: handleRowSelectionChange,
+    onSortingChange: handleSortingChange,
     getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
-    initialState: { pagination: { pageSize: 50 } },
+    // Sorting, filtering and paging are all done by the database now. Leaving
+    // the client row models in would have TanStack re-sort and re-paginate the
+    // 50 rows it can see, which is not the same as sorting the whole set.
+    manualSorting: true,
+    manualFiltering: true,
+    manualPagination: true,
+    pageCount: files.pages,
     enableRowSelection: true,
   });
 
-  const { pageIndex, pageSize } = table.getState().pagination;
-  const pageCount = table.getPageCount();
-  const totalFiltered = filteredData.length;
+  const pageIndex = files.page - 1;
+  const pageSize = files.pageSize;
+  const pageCount = files.pages;
 
   /* ── Rows for current page ── */
   const pageRows = table.getRowModel().rows;
@@ -382,20 +440,39 @@ export default function FilesManagementTable({
 
   /* ── bulk actions ── */
   const handleBulkAction = useCallback((action) => {
-    if (!selectedRows.length) { alert("Please select at least one row."); return; }
+    if (!selectionCount) { alert("Please select at least one row."); return; }
+    if (overBulkLimit) {
+      alert(`Bulk actions run on at most ${MAX_BULK} applications at a time. Narrow the filter and try again.`);
+      return;
+    }
     setBulkConfirm(action);
-  }, [selectedRows]);
+  }, [selectionCount, overBulkLimit]);
 
   // Execute the confirmed bulk action against the real API, then refresh.
   const runBulkAction = useCallback(async () => {
     const action = bulkConfirm; // "approve" | "reject"
-    const applicationIds = selectedRows.map((r) => r._id).filter(Boolean);
-    if (!action || !applicationIds.length) { setBulkConfirm(null); return; }
+    if (!action) { setBulkConfirm(null); return; }
+
+    /**
+     * Two request shapes, matching the two selection modes.
+     *
+     * For "all matching" no ids are sent: the server rebuilds the filter with
+     * the same builder the list used, and `expectedCount` is the number the
+     * operator just confirmed. If the set has shifted in between — a dealer
+     * submitted, another admin approved — the server answers 409 with the real
+     * count and does nothing, rather than acting on a different set than was
+     * agreed to.
+     */
+    const payload = selectAllMatching
+      ? { filter: { type: filesTab, ...files.filterParams }, expectedCount: totalFiltered }
+      : { applicationIds: selectedRows.map((r) => r._id).filter(Boolean) };
+
+    if (!selectAllMatching && !payload.applicationIds.length) { setBulkConfirm(null); return; }
 
     setBulkBusy(true);
     try {
       const endpoint = action === "approve" ? "/workflow/bulk-approve" : "/workflow/bulk-reject";
-      const { data } = await API.post(endpoint, { applicationIds });
+      const { data } = await API.post(endpoint, payload);
 
       const okCount = (action === "approve" ? data?.approvedCount : data?.rejectedCount) ?? 0;
       const failCount = data?.failedCount ?? 0;
@@ -407,6 +484,8 @@ export default function FilesManagementTable({
         fetchStats ? fetchStats() : Promise.resolve(),
       ]);
       setRowSelection({});
+      setSelectedById(new Map());
+      setSelectAllMatching(false);
       setBulkConfirm(null);
 
       if (failCount > 0) {
@@ -419,15 +498,26 @@ export default function FilesManagementTable({
       }
     } catch (err) {
       setBulkConfirm(null);
-      showToast("error", `Bulk ${action} failed: ${err?.response?.data?.error || err.message}`);
+      const status = err?.response?.status;
+      const body = err?.response?.data || {};
+      // 409: the matching set moved between confirming and sending. 413: more
+      // than the server will process in one run. Both mean nothing happened.
+      if (status === 409) {
+        showToast("warning", `${body.error} Now ${body.total} match; nothing was ${action === "approve" ? "approved" : "rejected"}.`);
+        if (files?.refresh) files.refresh();
+      } else if (status === 413) {
+        showToast("warning", body.error);
+      } else {
+        showToast("error", `Bulk ${action} failed: ${body.error || err.message}`);
+      }
     } finally {
       setBulkBusy(false);
     }
-  }, [bulkConfirm, selectedRows, fetchAllFiles, fetchStats, filesTab, showToast]);
+  }, [bulkConfirm, selectedRows, selectAllMatching, totalFiltered, files, fetchAllFiles, fetchStats, filesTab, showToast]);
 
   const clearFilters = () => {
-    setGlobalSearch(""); setFilterBranch(""); setFilterDistrict("");
-    setFilterStage(""); setFilterDateFrom(""); setFilterDateTo("");
+    files.resetFilters();
+    setSelectAllMatching(false);
   };
   const hasActiveFilters = globalSearch || filterBranch || filterDistrict || filterStage || filterDateFrom || filterDateTo;
 
@@ -604,21 +694,50 @@ export default function FilesManagementTable({
         </div>
 
         {/* ── Bulk action bar (visible when rows selected) ── */}
-        {selectedRows.length > 0 && (
+        {(selectedRows.length > 0 || selectAllMatching) && (
           <div style={{
             display: "flex", alignItems: "center", gap: 10, padding: "10px 20px",
-            background: "#EFF6FF", borderBottom: "1px solid #BFDBFE",
+            background: overBulkLimit ? "#FFF7ED" : "#EFF6FF",
+            borderBottom: `1px solid ${overBulkLimit ? "#FED7AA" : "#BFDBFE"}`,
+            flexWrap: "wrap",
           }}>
             <span style={{ fontSize: 13, fontWeight: 700, color: BRAND.blue }}>
-              {selectedRows.length} row{selectedRows.length !== 1 ? "s" : ""} selected
+              {selectAllMatching
+                ? `All ${selectionCount} matching application${selectionCount !== 1 ? "s" : ""} selected`
+                : `${selectionCount} row${selectionCount !== 1 ? "s" : ""} selected`}
             </span>
+
+            {/* Offer to extend the selection past this page. Without this the
+                operator can only ever act on what is loaded, which is the
+                behaviour pagination would otherwise have taken away. */}
+            {!selectAllMatching && totalFiltered > filteredData.length && (
+              <button
+                className="fmt-btn"
+                onClick={() => { setRowSelection({}); setSelectedById(new Map()); setSelectAllMatching(true); }}
+              >
+                Select all {totalFiltered} matching
+              </button>
+            )}
+            {selectAllMatching && (
+              <button className="fmt-btn" onClick={() => setSelectAllMatching(false)}>
+                Clear selection
+              </button>
+            )}
+
+            {/* The server refuses more than MAX_BULK in one run, so say so here
+                rather than letting the operator confirm and be rejected. */}
+            {overBulkLimit && (
+              <span style={{ fontSize: 12, fontWeight: 600, color: "#9A3412" }}>
+                Bulk actions run on at most {MAX_BULK} at a time — narrow the filter to continue.
+              </span>
+            )}
             {/* Approve/Reject only apply to Pending applications */}
             {filesTab === "pending" && (
               <>
-                <button className="fmt-btn fmt-btn-success" onClick={() => handleBulkAction("approve")} disabled={bulkBusy}>
+                <button className="fmt-btn fmt-btn-success" onClick={() => handleBulkAction("approve")} disabled={bulkBusy || overBulkLimit}>
                   {checkIcon} Approve Selected
                 </button>
-                <button className="fmt-btn fmt-btn-danger" onClick={() => handleBulkAction("reject")} disabled={bulkBusy}>
+                <button className="fmt-btn fmt-btn-danger" onClick={() => handleBulkAction("reject")} disabled={bulkBusy || overBulkLimit}>
                   {xIcon} Reject Selected
                 </button>
               </>
@@ -659,7 +778,7 @@ export default function FilesManagementTable({
               className="fmt-select"
               style={{ padding: "4px 8px", fontSize: 12 }}
               value={pageSize}
-              onChange={(e) => table.setPageSize(Number(e.target.value))}
+              onChange={(e) => files.setPageSize(Number(e.target.value))}
             >
               {[25, 50, 100, 200].map((n) => <option key={n} value={n}>{n}</option>)}
             </select>
@@ -764,16 +883,16 @@ export default function FilesManagementTable({
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <button
                 className="fmt-pagination-btn"
-                onClick={() => table.setPageIndex(0)}
-                disabled={!table.getCanPreviousPage()}
+                  onClick={() => files.setPage(1)}
+                disabled={!(files.page > 1)}
                 title="First page"
               >
                 «
               </button>
               <button
                 className="fmt-pagination-btn"
-                onClick={() => table.previousPage()}
-                disabled={!table.getCanPreviousPage()}
+                onClick={() => files.setPage((n) => Math.max(1, n - 1))}
+                disabled={!(files.page > 1)}
               >
                 ‹
               </button>
@@ -799,7 +918,7 @@ export default function FilesManagementTable({
                     <button
                       key={p}
                       className={`fmt-pagination-btn${p === current ? " active" : ""}`}
-                      onClick={() => table.setPageIndex(p)}
+                        onClick={() => files.setPage(p + 1)}
                     >
                       {p + 1}
                     </button>
@@ -809,15 +928,15 @@ export default function FilesManagementTable({
 
               <button
                 className="fmt-pagination-btn"
-                onClick={() => table.nextPage()}
-                disabled={!table.getCanNextPage()}
+                onClick={() => files.setPage((n) => Math.min(files.pages, n + 1))}
+                disabled={!(files.page < files.pages)}
               >
                 ›
               </button>
               <button
                 className="fmt-pagination-btn"
-                onClick={() => table.setPageIndex(pageCount - 1)}
-                disabled={!table.getCanNextPage()}
+                  onClick={() => files.setPage(files.pages)}
+                disabled={!(files.page < files.pages)}
                 title="Last page"
               >
                 »
@@ -831,7 +950,7 @@ export default function FilesManagementTable({
                 className="fmt-select"
                 style={{ padding: "4px 8px", fontSize: 12 }}
                 value={pageIndex}
-                onChange={(e) => table.setPageIndex(Number(e.target.value))}
+                  onChange={(e) => files.setPage(Number(e.target.value) + 1)}
               >
                 {pageOptions.map((p) => (
                   <option key={p} value={p}>Page {p + 1}</option>
