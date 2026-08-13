@@ -72,17 +72,49 @@ export const buildFinalizedFilter = async (_admin, baseFilter = {}) => {
 };
 
 /**
+ * Optional createdAt window for the stat counts, covering whole local days.
+ *
+ * Deliberately the same rules as the date filter in utils/filesQuery.js: the
+ * dashboard tiles and the file list must agree about which records fall in a
+ * range, or the tile would report a number the list cannot show. An
+ * unparseable date is dropped rather than handed to Mongo as an Invalid Date,
+ * which would match nothing and silently zero the counts.
+ */
+const statDateClause = (range) => {
+  if (!range) return null;
+  const out = {};
+  if (range.from) {
+    const d = new Date(range.from);
+    if (!Number.isNaN(d.getTime())) { d.setHours(0, 0, 0, 0); out.$gte = d; }
+  }
+  if (range.to) {
+    const d = new Date(range.to);
+    if (!Number.isNaN(d.getTime())) { d.setHours(23, 59, 59, 999); out.$lte = d; }
+  }
+  return Object.keys(out).length ? { createdAt: out } : null;
+};
+
+/**
  * Returns { pending, approved, rejected, total } counts for the given admin.
  * - pending  : filtered by admin's workflowStages
  * - approved : unfiltered (all admins see all)
  * - rejected : unfiltered (all admins see all)
+ *
+ * `dateRange` is optional and defaults to null. Omitted, every query below is
+ * exactly what it has always been, so the existing /workflow/stats caller is
+ * unaffected. Supplied, the tiles can be scoped to a date range without the
+ * dashboard downloading every record to filter client-side.
  */
 export const getStatCounts = async (
   admin,
   Application,
   ApprovedApplication,
-  RejectedApplication
+  RejectedApplication,
+  dateRange = null
 ) => {
+  const dateFilter = statDateClause(dateRange);
+  const withDate = (f) => (dateFilter ? { $and: [f, dateFilter] } : f);
+
   const basePending = {
     $or: [
       { status: { $in: ["pending", null] } },
@@ -98,9 +130,9 @@ export const getStatCounts = async (
       : { $and: [basePending, pendingAccessFilter] };
 
   const [pending, approved, rejected] = await Promise.all([
-    Application.countDocuments(pendingFilter),
-    ApprovedApplication.countDocuments({}),
-    RejectedApplication.countDocuments({}),
+    Application.countDocuments(withDate(pendingFilter)),
+    ApprovedApplication.countDocuments(dateFilter || {}),
+    RejectedApplication.countDocuments(dateFilter || {}),
   ]);
 
   return { pending, approved, rejected, total: pending + approved + rejected };

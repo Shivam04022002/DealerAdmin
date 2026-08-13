@@ -236,11 +236,20 @@ export const applicationStats = async (req, res) => {
     // Superadmin route — req.admin is always superadmin here, so getStatCounts
     // returns global unfiltered counts.  The same helper is used by /workflow/stats
     // for regular admins, ensuring both paths share identical counting logic.
+    //
+    // `from`/`to` are optional. Without them the response is byte-identical to
+    // what it has always been; with them the tiles can be scoped to a date
+    // range on the server, instead of the dashboard downloading every record
+    // and filtering client-side to produce the same three numbers.
+    const { from, to } = req.query;
+    const dateRange = from || to ? { from, to } : null;
+
     const counts = await getStatCounts(
       req.admin,
       Application,
       ApprovedApplication,
-      RejectedApplication
+      RejectedApplication,
+      dateRange
     );
     return res.json({ stats: counts });
   } catch (err) {
